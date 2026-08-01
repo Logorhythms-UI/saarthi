@@ -1,7 +1,10 @@
 [project]
-name = "saarthi"
+name = "Saarthi"
 version = "0.1.0"
-description = "Add your description here"
+description = "Edge Efficient Episodic Memory Aid"
 readme = "README.md"
 requires-python = "==3.11.15"
-dependencies = []
+dependencies = [
+    "peewee>=4.3.0",
+    "tabulate>=0.10.0",
+]
