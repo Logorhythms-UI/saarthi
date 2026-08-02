@@ -1,6 +1,10 @@
-from schema import db, ImageHistory
-from tabulate import tabulate
 import logging
+
+from schema import ImageHistory, db
+from tabulate import tabulate
+
+# Create a logger for this file
+logger = logging.getLogger(__name__)
 
 
 class DB_API:
@@ -10,7 +14,7 @@ class DB_API:
         db.create_tables(
             [ImageHistory]
         )  # Safe creates the table (does not re-create if table already there)
-        logging.info("Db Connection Esthablished, and Tables Ready")
+        logger.info("Db Connection Esthablished, and Tables Ready")
 
     def finalize(self) -> None:
         db.close()
@@ -37,14 +41,14 @@ class DB_API:
         print(tabulate(images, headers=headers, tablefmt="grid"))
 
     def add_image(self, objects_identified: list[str]) -> None:
-        assert type(objects_identified) is list[str], (
-            f"add_image expected a list of string objects identified, got {type(objects_identified)}."
-        )
+        assert (
+            type(objects_identified) is list[str]
+        ), f"add_image expected a list of string objects identified, got {type(objects_identified)}."
         record = ImageHistory.create(objects_identified=objects_identified)
         if record:
-            logging.info(f"New Image with objects {objects_identified} was added.")
+            logger.info(f"New Image with objects {objects_identified} was added.")
         else:
-            logging.warning(
+            logger.warning(
                 f"Could not add new image with objects identified {objects_identified}"
             )
 
