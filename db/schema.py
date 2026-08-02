@@ -1,5 +1,6 @@
-from peewee import SqliteDatabase, TextField, DateTimeField, Model, AutoField
 import datetime
+
+from peewee import AutoField, DateTimeField, Model, SqliteDatabase, TextField
 
 db = SqliteDatabase("database.db")
 
@@ -15,4 +16,3 @@ class ImageHistory(BadeModel):
         null=True, index=True
     )  # string list of objects identified with : as delimiter
     timestamp = DateTimeField(default=datetime.datetime.now)
-
