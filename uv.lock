@@ -22,8 +22,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "peewee", specifier = ">=4.3.0" },
-    { name = "tabulate", specifier = ">=0.10.0" },
+    { name = "peewee", specifier = "==4.3.0" },
+    { name = "tabulate", specifier = "==0.10.0" },
 ]
 
 [[package]]
