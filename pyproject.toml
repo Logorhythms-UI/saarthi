@@ -5,6 +5,6 @@ description = "Edge Efficient Episodic Memory Aid"
 readme = "README.md"
 requires-python = "==3.11.15"
 dependencies = [
-    "peewee>=4.3.0",
-    "tabulate>=0.10.0",
+    "peewee==4.3.0",
+    "tabulate==0.10.0",
 ]
