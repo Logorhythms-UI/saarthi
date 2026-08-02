@@ -5,9 +5,12 @@ Edge Efficient Episodic Memory Aid
 ## Local Project Setup
 
 1. Clone the repo
-2. Make sure you have [uv](https://docs.astral.sh/uv/) installed
-3. Run: `uv sync`
-4. That's it! You're good to begin development :)
+1. Make sure you have [uv](https://docs.astral.sh/uv/) installed.
+1. Run: `uv sync` in the project directory.
+1. Since you already have `uv` installed, install `pre-commit` with `uv tool install pre-commit`.
+1. Then run `pre-commit install` in this project directory.
+1. Update the `pre-commit` to use the latest versions of `ruff` and `black` with `pre-commit autoupdate` in this project directory.
+1. That's it! You're good to begin development :)
 
 ## A few ground rules
 
