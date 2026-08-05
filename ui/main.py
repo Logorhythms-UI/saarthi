@@ -14,11 +14,11 @@ logging.basicConfig(
 logger: logging.Logger = logging.getLogger(__name__)
 
 # Ensure storage directory exists
-STORAGE_DIR: str = "storage"
+STORAGE_DIR: str = os.path.join(os.path.dirname(__file__), "uploads")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 
 # Add static files route for displaying images
-app.add_static_files("/storage", STORAGE_DIR)
+app.add_static_files("/uploads", STORAGE_DIR)
 
 # State to keep track of uploaded files
 uploaded_image_paths: list[str] = []
@@ -74,11 +74,11 @@ def process_images(prompt: str) -> None:
                 result_path: str | None = process_image(img_path, prompt)
                 if result_path is not None:
                     assert isinstance(result_path, str), "Result path must be a string"
-                    # The static route serves from /storage/...
-                    # Assuming result_path is like 'storage/image.jpg'
+                    # The static route serves from /uploads/...
+                    # Assuming result_path is like 'ui/uploads/image.jpg'
                     # We need to construct the URL for nicegui
                     filename: str = os.path.basename(result_path)
-                    image_url: str = f"/storage/{filename}"
+                    image_url: str = f"/uploads/{filename}"
 
                     with ui.card().classes("w-full items-center"):
                         ui.label(f"Processed: {filename}").classes("text-lg font-bold")
