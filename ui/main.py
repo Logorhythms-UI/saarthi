@@ -1,5 +1,3 @@
-# black formatting is not done yet
-
 import logging
 import os
 
@@ -22,7 +20,11 @@ app.add_static_files("/uploads", STORAGE_DIR)
 
 # State to keep track of uploaded files
 uploaded_image_paths: list[str] = []
+
+# Global references for UI components
 upload_status_label: ui.label | None = None
+describe_section: ui.card | None = None
+results_section: ui.card | None = None
 results_container: ui.column | None = None
 
 
@@ -61,8 +63,10 @@ def process_images(prompt: str) -> None:
         f"Processing {len(uploaded_image_paths)} images with prompt: '{prompt}'"
     )
 
-    # Clear previous results container
-    if not results_container:
+    if results_section is not None:
+        results_section.set_visibility(True)
+
+    if results_container is None:
         return
 
     results_container.clear()
@@ -73,15 +77,18 @@ def process_images(prompt: str) -> None:
                 result_path: str | None = process_image(img_path, prompt)
                 if result_path is not None:
                     assert isinstance(result_path, str), "Result path must be a string"
-                    # The static route serves from /uploads/...
-                    # Assuming result_path is like 'ui/uploads/image.jpg'
-                    # We need to construct the URL for nicegui
                     filename: str = os.path.basename(result_path)
                     image_url: str = f"/uploads/{filename}"
 
-                    with ui.card().classes("w-full items-center"):
-                        ui.label(f"Processed: {filename}").classes("text-lg font-bold")
-                        ui.image(image_url).classes("w-full max-w-lg rounded")
+                    with ui.card().classes(
+                        "w-full items-center no-shadow border border-gray-200"
+                    ):
+                        ui.label(f"Processed: {filename}").classes(
+                            "text-md font-semibold text-gray-700"
+                        )
+                        ui.image(image_url).classes(
+                            "w-full max-w-lg rounded-lg shadow-sm mt-4"
+                        )
                 else:
                     ui.notify(f"Processing failed for {img_path}", type="negative")
             except Exception as ex:  # noqa: BLE001
@@ -96,41 +103,98 @@ def update_ui_state() -> None:
     if upload_status_label:
         upload_status_label.set_text(f"{len(uploaded_image_paths)} image(s) uploaded.")
 
+    if describe_section and len(uploaded_image_paths) > 0:
+        describe_section.set_visibility(True)
+
 
 @ui.page("/")
 def main_page() -> None:
     """Main entry point for the UI application."""
     logger.info("Rendering main page.")
 
-    with ui.column().classes("w-full max-w-3xl mx-auto p-4 items-stretch"):
-        ui.label("Saarthi Vision Model UI").classes(
-            "text-3xl font-bold mb-6 text-center"
+    # Inject premium CSS
+    ui.add_head_html("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            font-family: 'Inter', sans-serif;
+            color: #1f2937;
+            min-height: 100vh;
+        }
+        .glass-card {
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            padding: 32px;
+            margin-bottom: 24px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .glass-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 50px rgba(0, 0, 0, 0.12);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .primary-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            color: white !important;
+            border-radius: 8px !important;
+            font-weight: 600 !important;
+            padding: 12px 24px !important;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4) !important;
+            transition: all 0.3s ease !important;
+        }
+        .primary-btn:hover {
+            opacity: 0.9 !important;
+            transform: translateY(-1px) !important;
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6) !important;
+        }
+    </style>
+    """)
+
+    with ui.column().classes("w-full max-w-4xl mx-auto p-6 items-stretch"):
+        ui.label("Saarthi").classes(
+            "text-5xl font-extrabold mb-8 text-center gradient-text tracking-tight"
         )
 
-        with ui.card().classes("w-full mb-6"):
-            ui.label("1. Upload Images").classes("text-xl font-semibold mb-2")
+        # 1. Upload Section (Always visible)
+        with ui.card().classes("glass-card w-full"):
+            ui.label("Upload Images").classes("text-2xl font-bold mb-4 text-gray-800")
             ui.upload(multiple=True, on_upload=handle_upload, auto_upload=True).classes(
-                "w-full"
-            )
-            global upload_status_label
-            upload_status_label = ui.label("0 image(s) uploaded.").classes(
-                "mt-2 text-gray-600"
+                "w-full border-2 border-dashed border-gray-300 rounded-xl p-4 bg-gray-50/50 hover:bg-gray-50 transition-colors"
             )
 
-        with ui.card().classes("w-full mb-6"):
-            ui.label("2. Describe Object").classes("text-xl font-semibold mb-2")
+            global upload_status_label
+            upload_status_label = ui.label("0 image(s) uploaded.").classes(
+                "mt-4 text-gray-500 font-medium"
+            )
+
+        # 2. Describe Section (Initially hidden)
+        global describe_section
+        with ui.card().classes("glass-card w-full") as describe_section:
+            describe_section.set_visibility(False)
+            ui.label("Describe Object").classes("text-2xl font-bold mb-4 text-gray-800")
             prompt_input = ui.input(
                 label="What should the model find?", placeholder="e.g., a red apple"
-            ).classes("w-full")
+            ).classes("w-full text-lg mb-6")
 
             ui.button(
                 "Process Images",
                 on_click=lambda: process_images(prompt_input.value or ""),
-            ).classes("w-full mt-4")
+            ).classes("primary-btn w-full text-lg")
 
-        ui.label("3. Results").classes("text-xl font-semibold mb-2 mt-4")
-        global results_container
-        results_container = ui.column().classes("w-full items-center gap-4")
+        # 3. Results Section (Initially hidden)
+        global results_section, results_container
+        with ui.card().classes("glass-card w-full") as results_section:
+            results_section.set_visibility(False)
+            ui.label("Results").classes("text-2xl font-bold mb-6 text-gray-800")
+            results_container = ui.column().classes("w-full items-stretch gap-6")
 
 
 if __name__ in {"__main__", "__mp_main__"}:
