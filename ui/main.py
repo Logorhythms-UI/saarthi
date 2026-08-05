@@ -26,24 +26,23 @@ upload_status_label: ui.label | None = None
 results_container: ui.column | None = None
 
 
-def handle_upload(e: events.UploadEventArguments) -> None:
+async def handle_upload(e: events.UploadEventArguments) -> None:
     """Handles the file upload event and saves the image to the storage directory."""
     assert e is not None, "Upload event arguments cannot be None"
-    assert e.name is not None, "Uploaded file must have a name"
-    assert e.content is not None, "Uploaded file must have content"
+    assert e.file is not None, "Uploaded file must exist"
+    assert e.file.name is not None, "Uploaded file must have a name"
 
-    logger.info(f"Uploading file: {e.name}")
+    logger.info(f"Uploading file: {e.file.name}")
     try:
-        file_path: str = os.path.join(STORAGE_DIR, e.name)
-        with open(file_path, "wb") as f:
-            f.write(e.content.read())
+        file_path: str = os.path.join(STORAGE_DIR, e.file.name)
+        await e.file.save(file_path)
         uploaded_image_paths.append(file_path)
         logger.info(f"File saved to: {file_path}")
-        ui.notify(f"Uploaded {e.name}", type="positive")
+        ui.notify(f"Uploaded {e.file.name}", type="positive")
         update_ui_state()
     except Exception as ex:  # noqa: BLE001
-        logger.error(f"Failed to upload file {e.name}: {ex}")
-        ui.notify(f"Failed to upload {e.name}", type="negative")
+        logger.error(f"Failed to upload file {e.file.name}: {ex}")
+        ui.notify(f"Failed to upload {e.file.name}", type="negative")
 
 
 def process_images(prompt: str) -> None:
