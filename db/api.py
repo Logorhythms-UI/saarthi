@@ -1,59 +1,36 @@
 import logging
+from pathlib import Path
 
 from schema import ImageHistory, db
-from tabulate import tabulate
+# from tabulate import tabulate
 
-# Create a logger for this file
-logger = logging.getLogger(__name__)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="DB - %(asctime)s - %(levelname)s - %(message)s"
+)
 
 
-class DB_API:
+class db_engine:
+    def __init__(self) -> None:
+        self.logger: logging.Logger = logging.getLogger(__name__)
+        self.initialize()
+        self.logger.info("DB Initialized and ready to go")
+    
     def initialize(self) -> None:
         # Initialize the DB and create necessary tables
         db.connect()
         db.create_tables(
             [ImageHistory]
         )  # Safe creates the table (does not re-create if table already there)
-        logger.info("Db Connection Esthablished, and Tables Ready")
+        self.logger.info("Db Connection Esthablished, and Tables Ready")
 
     def finalize(self) -> None:
         db.close()
 
-    def print_table(self) -> None:
-        ans = ImageHistory.select()
-        images = []
-        headers = ["Image Name", "Image Path", "Objects Identified", "Timestamp"]
-
-        for a in ans:
-            images.append(
-                [
-                    a.img_name,
-                    f"$PROJECT_HOME/storage/{a.img_name}.png",
-                    (
-                        "No Objects Identified"
-                        if a.objects_identified is None
-                        else a.objects_identified.split(":")
-                    ),
-                    a.timestamp,
-                ]
-            )
-
-        print(tabulate(images, headers=headers, tablefmt="grid"))
-
-    def add_image(self, objects_identified: list[str]) -> None:
-        assert (
-            type(objects_identified) is list[str]
-        ), f"add_image expected a list of string objects identified, got {type(objects_identified)}."
-        record = ImageHistory.create(objects_identified=objects_identified)
+    def add_image(self, imgpath: str) -> None:
+        assert Path(imgpath).exists(), f"Image {imgpath} does not exist"
+        record = ImageHistory.create(imgpath=imgpath)
         if record:
-            logger.info(f"New Image with objects {objects_identified} was added.")
+            self.logger.info(f"Image {imgpath} added to db")
         else:
-            logger.warning(
-                f"Could not add new image with objects identified {objects_identified}"
-            )
-
-
-DB = DB_API()
-DB.initialize()
-DB.print_table()
-DB.finalize()
+            self.logger.warning(f"Failed to add Image {imgpath} to db")
