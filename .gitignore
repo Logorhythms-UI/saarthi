@@ -13,3 +13,5 @@ benchmarks/object-detection/benchmark_state*.json
 results.json
 weights/
 yolov8s-world.pt
+ai/models
+prompts/
