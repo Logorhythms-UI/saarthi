@@ -1,135 +1,236 @@
-import logging
-import zipfile
+"""Application-level orchestration layer.
 
-# Import specific DB exception used by peewee for constraint errors
+Coordinates AI models, database, and storage to provide
+a clean interface for the UI.
+"""
+
+import logging
+import time
+from pathlib import Path
+
 from peewee import IntegrityError
 
-from ai.app import AI_Engine
-from db.api import db_engine
+from ai.object_detector import ObjectDetector
+from ai.query_normalizer import QueryNormalizer
+from db.api import DatabaseEngine
 from db.schema import ImageHistory
-from storage.app import storage_engine
+from storage.app import StorageEngine
 from utils.result import Result
 
-logging.basicConfig(
-    level=logging.INFO, format="BACKEND - %(asctime)s - %(levelname)s - %(message)s"
-)
+logger: logging.Logger = logging.getLogger(__name__)
 
 
-class backend_api:
+class Backend:
+    """Application-level orchestration layer.
+
+    Coordinates AI models, database, and storage to provide
+    a clean interface for the UI.
+    """
+
     def __init__(self) -> None:
-        self.logger: logging.Logger = logging.getLogger(__name__)
-        self.storage_api: storage_engine = storage_engine()
-        self.db_api: db_engine = db_engine()
-        self.ai_api: AI_Engine = AI_Engine()
-        self.logger.info("Backend API Started and ready to go")
+        self._storage: StorageEngine = StorageEngine()
+        self._db: DatabaseEngine = DatabaseEngine()
+        self._query_normalizer: QueryNormalizer = QueryNormalizer()
+        self._object_detector: ObjectDetector = ObjectDetector()
+        logger.info("Backend initialized — all subsystems ready")
+
+    def ingest_upload(self, file_content: bytes, filename: str) -> Result:
+        """Store an uploaded image and register it in the database.
+
+        Accepts raw file bytes (from NiceGUI upload handler).
+        Returns Result with the stored path on success.
+        """
+        assert isinstance(file_content, bytes), "file_content must be bytes"
+        assert isinstance(filename, str), "filename must be a string"
+
+        try:
+            stored_path: str = self._storage.store_upload(file_content, filename)
+        except (AssertionError, ValueError) as e:
+            logger.error("Storage rejected upload '%s': %s", filename, e)
+            return Result(err=str(e))
+        except OSError as e:
+            logger.error("Failed to store upload '%s': %s", filename, e)
+            return Result(err=f"Failed to store image: {e}")
+
+        try:
+            self._db.add_image(stored_path)
+        except IntegrityError:
+            logger.info("Image already exists in database: %s", stored_path)
+            return Result(result=stored_path)
+        except (AssertionError, OSError) as e:
+            logger.error("Database rejected image '%s': %s", stored_path, e)
+            return Result(err=str(e))
+
+        logger.info("Ingested upload: %s", filename)
+        return Result(result=stored_path)
 
     def ingest_image(self, image_path: str) -> Result:
-        """Store a single image and register it in the database.
+        """Store a single image from a file path and register in DB.
 
         Returns Result with the stored path on success.
         """
         assert isinstance(image_path, str), "image_path must be a string"
 
         try:
-            stored_path: str = self.storage_api.upload_image(image_path)
+            stored_path: str = self._storage.upload_image(image_path)
         except AssertionError as e:
-            self.logger.error(f"Invalid image path {image_path}: {e}")
+            logger.error("Invalid image path %s: %s", image_path, e)
             return Result(err=str(e))
         except (FileNotFoundError, OSError) as e:
-            self.logger.error(f"Failed to store image {image_path}: {e}")
+            logger.error("Failed to store image %s: %s", image_path, e)
             return Result(err=str(e))
 
         try:
-            self.db_api.add_image(stored_path)
-        except AssertionError as e:
-            # Should not happen because storage confirmed file exists, but handle defensively
-            self.logger.error(f"Database rejected image {stored_path}: {e}")
-            return Result(err=str(e))
+            self._db.add_image(stored_path)
         except IntegrityError:
-            # Image already registered; treat as success but inform caller
-            self.logger.info(f"Image already exists in DB: {stored_path}")
+            logger.info("Image already exists in database: %s", stored_path)
             return Result(result=stored_path)
+        except (AssertionError, OSError) as e:
+            logger.error("Database rejected image %s: %s", stored_path, e)
+            return Result(err=str(e))
 
-        self.logger.info(f"Ingested image: {stored_path}")
+        logger.info("Ingested image: %s", stored_path)
         return Result(result=stored_path)
 
-    def ingest_zip(self, zip_path: str) -> Result:
-        """Extract images from a zip and register each in the database.
-
-        Returns Result with the count of successfully ingested images.
-        """
-        assert isinstance(zip_path, str), "zip_path must be a string"
-
-        try:
-            extracted_paths: list[str] = self.storage_api.extract_zip(zip_path)
-        except AssertionError as e:
-            self.logger.error(f"Invalid zip path {zip_path}: {e}")
-            return Result(err=str(e))
-        except zipfile.BadZipFile as e:
-            self.logger.error(f"Bad zip file {zip_path}: {e}")
-            return Result(err=str(e))
-        except (FileNotFoundError, OSError) as e:
-            self.logger.error(f"Failed to extract zip {zip_path}: {e}")
-            return Result(err=str(e))
-
-        ingested_count: int = 0
-        for img_path in extracted_paths:
-            try:
-                # Image is already in uploads after extraction, register in DB
-                self.db_api.add_image(img_path)
-                ingested_count += 1
-            except IntegrityError:
-                # Skip duplicates; continue ingesting the rest
-                self.logger.info(f"Image already registered, skipping: {img_path}")
-                continue
-            except AssertionError as e:
-                self.logger.error(f"Invalid image during ingest {img_path}: {e}")
-                continue
-            except OSError as e:
-                self.logger.error(f"OS error while registering {img_path}: {e}")
-                continue
-
-        self.logger.info(f"Ingested {ingested_count} images from zip {zip_path}")
-        return Result(result=ingested_count)
-
     def search(self, query: str) -> Result:
-        """Search for an object across all stored images in reverse chronological order.
+        """Execute the full search pipeline: SLM normalisation → DINO detection.
 
-        Iterates from the most recent image to the oldest. On the first
-        detection match, draws bounding boxes on the image and returns the
-        annotated image path via Result.
+        Searches images from newest to oldest.  Stops at the first valid
+        detection.  Returns a structured result with annotated image,
+        detection data, and metadata.
 
-        Returns Result with err if no match is found across all images.
+        The result dict contains:
+            annotated_image_path: str
+            normalized_query: str
+            original_query: str
+            detection: {label, confidence, bounding_box}
+            image_timestamp: str
+            images_searched: int
+            total_images: int
+            slm_duration_s: float
+            search_duration_s: float
         """
         assert isinstance(query, str), "query must be a string"
         assert len(query.strip()) > 0, "query must not be empty"
 
-        images: list[ImageHistory] = self.db_api.get_all_images_desc()
+        total_start: float = time.perf_counter()
+        logger.info("Search pipeline started — query: '%s'", query)
 
-        if len(images) == 0:
-            return Result(err="No images in the database. Upload images first.")
+        # Phase 1: Query normalisation via SLM
+        normalize_result: Result = self._query_normalizer.normalize(query)
+        slm_duration: float = time.perf_counter() - total_start
 
-        self.logger.info(
-            f"Searching for '{query}' across {len(images)} images "
-            f"(newest to oldest)"
+        if not normalize_result.ok:
+            logger.error("Query normalisation failed: %s", normalize_result.err)
+            return Result(err=f"Query processing failed: {normalize_result.err}")
+
+        normalized_query: str = normalize_result.result
+        logger.info(
+            "SLM normalisation completed in %.2fs: '%s' → '%s'",
+            slm_duration,
+            query,
+            normalized_query,
         )
 
-        for image_record in images:
-            img_path: str = image_record.imgpath
-            self.logger.info(f"Scanning: {img_path}")
+        # Phase 2: Get images in reverse chronological order
+        images: list[ImageHistory] = self._db.get_all_images_desc()
+        total_images: int = len(images)
 
-            detection_result: Result = self.ai_api.detect(img_path, query)
+        if total_images == 0:
+            return Result(err="No images in the database. Upload images first.")
+
+        logger.info(
+            "Searching '%s' across %d images (newest → oldest)",
+            normalized_query,
+            total_images,
+        )
+
+        # Phase 3: Iterate and detect
+        search_start: float = time.perf_counter()
+
+        for images_searched, image_record in enumerate(images, start=1):
+            image_path: str = image_record.imgpath
+            logger.info(
+                "Scanning image %d/%d: %s",
+                images_searched,
+                total_images,
+                Path(image_path).name,
+            )
+
+            detect_start: float = time.perf_counter()
+            detection_result: Result = self._object_detector.detect(
+                image_path, normalized_query
+            )
+            detect_duration: float = time.perf_counter() - detect_start
 
             if detection_result.ok:
-                data = detection_result.result
-                annotated_path: str = self.ai_api.draw_bounding_boxes(
-                    img_path,
-                    boxes=data["boxes"],
-                    labels=data["labels"],
-                    scores=data["scores"],
+                detection: dict = detection_result.result
+                logger.info(
+                    "Match found in %s (DINO inference: %.2fs, confidence: %.2f%%)",
+                    Path(image_path).name,
+                    detect_duration,
+                    detection["confidence"] * 100,
                 )
-                self.logger.info(f"Match found for '{query}' in {img_path}")
-                return Result(result=annotated_path)
 
-        self.logger.info(f"No match for '{query}' in any image")
-        return Result(err=f"'{query}' was not found in any stored image.")
+                # Generate annotated image
+                annotated_path: str = self._object_detector.draw_bounding_box(
+                    image_path,
+                    bounding_box=detection["bounding_box"],
+                    label=detection["label"],
+                    confidence=detection["confidence"],
+                )
+
+                total_duration: float = time.perf_counter() - total_start
+                search_duration: float = time.perf_counter() - search_start
+
+                logger.info(
+                    "Search complete — images searched: %d/%d, "
+                    "SLM: %.2fs, detection: %.2fs, total: %.2fs",
+                    images_searched,
+                    total_images,
+                    slm_duration,
+                    search_duration,
+                    total_duration,
+                )
+
+                return Result(
+                    result={
+                        "annotated_image_path": annotated_path,
+                        "normalized_query": normalized_query,
+                        "original_query": query,
+                        "detection": detection,
+                        "image_timestamp": str(image_record.timestamp),
+                        "images_searched": images_searched,
+                        "total_images": total_images,
+                        "slm_duration_s": round(slm_duration, 2),
+                        "search_duration_s": round(
+                            time.perf_counter() - search_start, 2
+                        ),
+                    }
+                )
+
+            logger.debug(
+                "No detection in %s (%.2fs): %s",
+                Path(image_path).name,
+                detect_duration,
+                detection_result.err,
+            )
+
+        total_duration = time.perf_counter() - total_start
+        logger.info(
+            "No match found — searched all %d images in %.2fs",
+            total_images,
+            total_duration,
+        )
+        return Result(
+            err=f"No matching object was found for '{normalized_query}' "
+            f"in any stored image."
+        )
+
+    def get_image_count(self) -> int:
+        """Return the number of images in the database."""
+        return self._db.get_image_count()
+
+    def get_all_images_desc(self) -> list[ImageHistory]:
+        """Return all image records ordered newest-first by sequence number."""
+        return self._db.get_all_images_desc()
