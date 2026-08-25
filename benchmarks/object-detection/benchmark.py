@@ -3,15 +3,14 @@ Zero-shot object detection benchmark tool.
 """
 import asyncio
 import json
-import os
 import time
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Any
 
 import torch
+from nicegui import ui
 from PIL import Image, ImageDraw
-from nicegui import ui, app
-from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
 from ultralytics import YOLO
 
 # Global models dictionary
@@ -41,14 +40,14 @@ def load_models():
     models_cache["llmdet_model"] = AutoModelForZeroShotObjectDetection.from_pretrained("iSEE-Laboratory/llmdet_tiny").to(device)
     print("All models loaded.")
 
-def draw_boxes(image: Image.Image, boxes: List[List[float]], color="red") -> Image.Image:
+def draw_boxes(image: Image.Image, boxes: list[list[float]], color="red") -> Image.Image:
     img_copy = image.copy()
     draw = ImageDraw.Draw(img_copy)
     for box in boxes:
         draw.rectangle(box, outline=color, width=3)
     return img_copy
 
-def infer_transformers(model_key: str, processor_key: str, image: Image.Image, query: str) -> Dict[str, Any]:
+def infer_transformers(model_key: str, processor_key: str, image: Image.Image, query: str) -> dict[str, Any]:
     start_time = time.time()
     processor = models_cache[processor_key]
     model = models_cache[model_key]
@@ -82,7 +81,7 @@ def infer_transformers(model_key: str, processor_key: str, image: Image.Image, q
         "failure": len(best_box) == 0
     }
 
-def infer_yolo(image: Image.Image, query: str) -> Dict[str, Any]:
+def infer_yolo(image: Image.Image, query: str) -> dict[str, Any]:
     start_time = time.time()
     model = models_cache["yolo_model"]
     model.set_classes([query])
@@ -105,20 +104,20 @@ def infer_yolo(image: Image.Image, query: str) -> Dict[str, Any]:
         "failure": len(boxes) == 0
     }
 
-def process_dino(image: Image.Image, query: str) -> Dict[str, Any]:
+def process_dino(image: Image.Image, query: str) -> dict[str, Any]:
     # DINO expects query to end with .
     norm_query = query.strip()
     if not norm_query.endswith("."):
         norm_query += "."
     return infer_transformers("dino_model", "dino_processor", image, norm_query)
 
-def process_owl(image: Image.Image, query: str) -> Dict[str, Any]:
+def process_owl(image: Image.Image, query: str) -> dict[str, Any]:
     return infer_transformers("owl_model", "owl_processor", image, query)
 
-def process_llmdet(image: Image.Image, query: str) -> Dict[str, Any]:
+def process_llmdet(image: Image.Image, query: str) -> dict[str, Any]:
     return infer_transformers("llmdet_model", "llmdet_processor", image, query)
 
-def process_yolo(image: Image.Image, query: str) -> Dict[str, Any]:
+def process_yolo(image: Image.Image, query: str) -> dict[str, Any]:
     return infer_yolo(image, query)
 
 
@@ -138,9 +137,9 @@ class BenchmarkApp:
         self.current_results = {}
         self.feedbacks_given = 0
         
-    def save_metric(self, model_name: str, query: str, image_path: str, is_correct: bool, result_data: Dict[str, Any]):
+    def save_metric(self, model_name: str, query: str, image_path: str, is_correct: bool, result_data: dict[str, Any]):
         try:
-            with open(self.results_file, "r") as f:
+            with open(self.results_file) as f:
                 data = json.load(f)
         except json.JSONDecodeError:
             data = []
@@ -165,7 +164,7 @@ class BenchmarkApp:
             self.current_index = (self.current_index + 1) % len(self.images) if self.images else 0
             self.refresh_ui()
 
-    def handle_feedback(self, model_name: str, query: str, image_path: str, is_correct: bool, result_data: Dict[str, Any], container: ui.column):
+    def handle_feedback(self, model_name: str, query: str, image_path: str, is_correct: bool, result_data: dict[str, Any], container: ui.column):
         self.save_metric(model_name, query, image_path, is_correct, result_data)
         container.clear()
         with container:
@@ -215,7 +214,7 @@ class BenchmarkApp:
             # Display results
             try:
                 res_dino, res_owl, res_yolo, res_llmdet = await asyncio.gather(*tasks)
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError) as e:
                 ui.notify(f"Error during inference: {e}")
                 loader.set_visibility(False)
                 return
@@ -247,8 +246,7 @@ class BenchmarkApp:
                             
                         # Feedback buttons
                         btn_container = ui.column().classes("w-full items-center mt-2")
-                        with btn_container:
-                            with ui.row():
+                        with btn_container, ui.row():
                                 ui.button("Correct", color="green", on_click=lambda n=name, q=query, p=current_image, r=res, c=btn_container: self.handle_feedback(n, q, p, True, r, c))
                                 ui.button("Incorrect", color="red", on_click=lambda n=name, q=query, p=current_image, r=res, c=btn_container: self.handle_feedback(n, q, p, False, r, c))
                                 
@@ -272,7 +270,7 @@ def main():
     print("Pre-loading models (this may take a while)...")
     try:
         load_models()
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(f"Warning: Model loading error: {e}")
         
     app = BenchmarkApp()
