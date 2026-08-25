@@ -1,7 +1,10 @@
 database.db
-__pycache__
-.vscode
-.venv
+__pycache__/
+*.pyc
+.env
+.venv/
+benchmarks/object-detection/images/
 storage/uploads/
 ai/models
 prompts/
+images/
