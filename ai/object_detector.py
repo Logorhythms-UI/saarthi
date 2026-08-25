@@ -18,8 +18,8 @@ from utils.result import Result
 logger: logging.Logger = logging.getLogger(__name__)
 
 _MODEL_ID: str = "IDEA-Research/grounding-dino-tiny"
-_BOX_THRESHOLD: float = 0.35
-_TEXT_THRESHOLD: float = 0.25
+_BOX_THRESHOLD: float = 0.65
+_TEXT_THRESHOLD: float = 0.90
 
 
 class ObjectDetector:

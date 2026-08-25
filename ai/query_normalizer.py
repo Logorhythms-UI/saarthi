@@ -16,7 +16,7 @@ from utils.result import Result
 logger: logging.Logger = logging.getLogger(__name__)
 
 # Validation thresholds
-_MAX_NORMALIZED_LENGTH: int = 200
+_MAX_NORMALIZED_LENGTH: int = 500
 _MAX_INPUT_LENGTH: int = 1000
 
 # Phrases that indicate the SLM echoed instructions instead of extracting
@@ -85,7 +85,7 @@ class QueryNormalizer:
                     {"role": "user", "content": stripped_query},
                 ],
                 temperature=0.0,
-                max_tokens=64,
+                max_tokens=100,
             )
         except RuntimeError as e:
             logger.error("SLM generation failed: %s", e)
