@@ -4,6 +4,7 @@ Zero-shot object detection benchmark tool.
 import asyncio
 import json
 import time
+import tracemalloc
 from pathlib import Path
 from typing import Any
 
@@ -48,24 +49,39 @@ def draw_boxes(image: Image.Image, boxes: list[list[float]], color="red") -> Ima
     return img_copy
 
 def infer_transformers(model_key: str, processor_key: str, image: Image.Image, query: str) -> dict[str, Any]:
-    start_time = time.time()
     processor = models_cache[processor_key]
     model = models_cache[model_key]
     device = get_device()
     
+    if device == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+        start_mem = torch.cuda.memory_allocated()
+    else:
+        # Start tracking CPU RAM
+        tracemalloc.start()
+
+    start_time = time.time()
     inputs = processor(images=image, text=query, return_tensors="pt").to(device)
     with torch.no_grad():
         outputs = model(**inputs)
     
     target_sizes = torch.tensor([image.size[::-1]]).to(device)
     results = processor.post_process_object_detection(outputs, threshold=0.1, target_sizes=target_sizes)[0]
-    
     inference_time = time.time() - start_time
+
+    memory_mb = 0.0
+    if device == "cuda":
+        peak_mem = torch.cuda.max_memory_allocated()
+        memory_mb = (peak_mem - start_mem) / (1024 * 1024)
+    else:
+        # Get peak memory usage during the traced block for CPU
+        _, peak_mem = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        memory_mb = peak_mem / (1024 * 1024)
     
     boxes = results["boxes"].cpu().numpy().tolist()
     scores = results["scores"].cpu().numpy().tolist()
     
-    # Pick the best score if exists
     if scores:
         best_idx = scores.index(max(scores))
         best_box = [boxes[best_idx]]
@@ -78,21 +94,39 @@ def infer_transformers(model_key: str, processor_key: str, image: Image.Image, q
         "boxes": best_box,
         "score": best_score,
         "inference_time": inference_time,
+        "memory_mb": memory_mb, # ADDED
         "failure": len(best_box) == 0
     }
 
 def infer_yolo(image: Image.Image, query: str) -> dict[str, Any]:
-    start_time = time.time()
     model = models_cache["yolo_model"]
-    model.set_classes([query])
+    device = get_device()
     
+    if device == "cuda":
+        torch.cuda.reset_peak_memory_stats()
+        start_mem = torch.cuda.memory_allocated()
+    else:
+        # Start tracking CPU RAM
+        tracemalloc.start()
+
+    start_time = time.time()
+    model.set_classes([query])
     results = model.predict(image, verbose=False)
     inference_time = time.time() - start_time
+    
+    memory_mb = 0.0
+    if device == "cuda":
+        peak_mem = torch.cuda.max_memory_allocated()
+        memory_mb = (peak_mem - start_mem) / (1024 * 1024)
+    else:
+        # Get peak memory usage during the traced block for CPU
+        _, peak_mem = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        memory_mb = peak_mem / (1024 * 1024)
     
     boxes = []
     best_score = 0.0
     if len(results) > 0 and len(results[0].boxes) > 0:
-        # Get the first/best box
         box_data = results[0].boxes[0]
         boxes = box_data.xyxy.cpu().numpy().tolist()
         best_score = float(box_data.conf.cpu().numpy()[0]) * 100
@@ -101,6 +135,7 @@ def infer_yolo(image: Image.Image, query: str) -> dict[str, Any]:
         "boxes": boxes,
         "score": best_score,
         "inference_time": inference_time,
+        "memory_mb": memory_mb, # ADDED
         "failure": len(boxes) == 0
     }
 
@@ -152,17 +187,12 @@ class BenchmarkApp:
             "false_positive": 0 if is_correct else (0 if result_data["failure"] else 1),
             "failure": 1 if result_data["failure"] else 0,
             "confidence_score": result_data["score"],
-            "inference_time": result_data["inference_time"]
+            "inference_time": result_data["inference_time"],
+            "memory_footprint_mb": result_data["memory_mb"] # ADDED
         }
         data.append(metric)
         with open(self.results_file, "w") as f:
             json.dump(data, f, indent=4)
-            
-        self.feedbacks_given += 1
-        if self.feedbacks_given >= 4:
-            # Move to next image when all feedbacks are given
-            self.current_index = (self.current_index + 1) % len(self.images) if self.images else 0
-            self.refresh_ui()
 
     def handle_feedback(self, model_name: str, query: str, image_path: str, is_correct: bool, result_data: dict[str, Any], container: ui.column):
         self.save_metric(model_name, query, image_path, is_correct, result_data)
@@ -204,12 +234,15 @@ class BenchmarkApp:
             img = Image.open(current_image).convert("RGB")
             
             # Run models concurrently
-            tasks = [
-                asyncio.to_thread(process_dino, img, query),
-                asyncio.to_thread(process_owl, img, query),
-                asyncio.to_thread(process_yolo, img, query),
-                asyncio.to_thread(process_llmdet, img, query),
-            ]
+            try:
+                res_dino = await asyncio.to_thread(process_dino, img, query)
+                res_owl = await asyncio.to_thread(process_owl, img, query)
+                res_yolo = await asyncio.to_thread(process_yolo, img, query)
+                res_llmdet = await asyncio.to_thread(process_llmdet, img, query)
+            except (RuntimeError, OSError, ValueError) as e:
+                ui.notify(f"Error during inference: {e}")
+                loader.set_visibility(False)
+                return
             
             # Display results
             try:
@@ -232,7 +265,7 @@ class BenchmarkApp:
                 for name, res in model_results:
                     with ui.card().classes("items-center w-64"):
                         ui.label(name).classes("font-bold")
-                        ui.label(f"Time: {res['inference_time']:.2f}s | Conf: {res['score']:.1f}%").classes("text-xs")
+                        ui.label(f"Time: {res['inference_time']:.2f}s | Mem: {res['memory_mb']:.1f} MB | Conf: {res['score']:.1f}%").classes("text-xs")
                         
                         if res["failure"]:
                             ui.label("No object found").classes("text-red-500 my-4")
