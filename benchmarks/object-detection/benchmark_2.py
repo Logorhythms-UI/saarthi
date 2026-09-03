@@ -184,7 +184,7 @@ def load_state() -> dict:
         try:
             with open(STATE_FILE, "r") as f:
                 return json.load(f)
-        except Exception as e:
+        except (json.JSONDecodeError, OSError) as e:
             print(f"Could not load state: {e}")
     return {}
 
@@ -268,7 +268,7 @@ class AppState:
                     "YOLO-World": res_yolo,
                     "LLMDet": res_llmdet,
                 }
-            except Exception as e:
+            except (RuntimeError, OSError, ValueError) as e:
                 print(f"Error processing {img_path}: {e}")
                 self.inference_results[key] = None
             finally:
@@ -609,7 +609,7 @@ def main():
     print("Pre-loading models (this may take a while)...")
     try:
         load_models()
-    except Exception as e:
+    except (RuntimeError, OSError, ValueError) as e:
         print(f"Warning: Model loading error: {e}")
 
     image_dir = Path(__file__).parent / "images_2"
