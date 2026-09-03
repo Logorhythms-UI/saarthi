@@ -264,6 +264,19 @@ class frontend_engine:
                         "primary-btn w-full text-lg"
                     )
 
+                    def handle_clear_cache() -> None:
+                        """Clear the AI inference cache so the next search re-runs inference."""
+                        engine.backend.clear_cache()
+                        ui.notify(
+                            "Inference cache cleared. Next search will re-run the model.",
+                            type="info",
+                        )
+                        engine.logger.info("Cache cleared from UI")
+
+                    ui.button("Clear Cache", on_click=handle_clear_cache).classes(
+                        "w-full text-base mt-2"
+                    ).props("flat color=grey-7")
+
     def run(self, title: str = "Saarthi", port: int = 8080) -> None:
         """Start the NiceGUI server. This call blocks."""
         assert isinstance(title, str), "title must be a string"
