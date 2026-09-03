@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 
@@ -10,6 +11,29 @@ from utils.result import Result
 logging.basicConfig(
     level=logging.INFO, format="AI - %(asctime)s - %(levelname)s - %(message)s"
 )
+
+# Cache file stored next to this module, persists across restarts
+_CACHE_PATH: Path = Path(__file__).parent / "inference_cache.json"
+
+
+def _load_cache() -> dict:
+    """Load the inference cache from disk, returning an empty dict on first run."""
+    if _CACHE_PATH.exists():
+        try:
+            with open(_CACHE_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {}
+    return {}
+
+
+def _save_cache(cache: dict) -> None:
+    """Persist the inference cache to disk."""
+    try:
+        with open(_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except OSError as e:
+        logging.getLogger(__name__).warning(f"Failed to save inference cache: {e}")
 
 
 class AI_Engine:
@@ -32,11 +56,18 @@ class AI_Engine:
         )
         self.logger.info("Grounding DINO model loaded and ready")
 
+        # Load persisted inference cache so results survive app restarts
+        self._cache: dict = _load_cache()
+        self.logger.info(f"Inference cache loaded: {len(self._cache)} entries")
+
     def detect(self, image_path: str, query: str) -> Result:
         """Run zero-shot object detection on a single image.
 
         The query is automatically lowercased and period-suffixed as required
         by Grounding DINO's tokenisation.
+
+        Results are cached to disk so that repeated searches (or app restarts)
+        never re-run the model on the same image+query pair.
 
         Returns Result with detection dict on success (keys: boxes, scores,
         labels), or Result with err if nothing was detected.
@@ -49,6 +80,22 @@ class AI_Engine:
         prompt: str = query.lower().strip()
         if not prompt.endswith("."):
             prompt = prompt + "."
+
+        # --- Cache lookup ---
+        cache_key: str = f"{image_path}|||{prompt}"
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
+            if cached is None:
+                # Previously found no detections — skip inference
+                self.logger.info(
+                    f"Cache hit (no detection) for '{query}' "
+                    f"in {Path(image_path).name}"
+                )
+                return Result(err=f"No '{query}' detected in {Path(image_path).name}")
+            self.logger.info(
+                f"Cache hit for '{query}' in {Path(image_path).name}"
+            )
+            return Result(result=cached)
 
         try:
             image: Image.Image = Image.open(image_path).convert("RGB")
@@ -71,6 +118,9 @@ class AI_Engine:
             boxes = detections["boxes"]
 
             if len(boxes) == 0:
+                # Cache the negative result so we skip this image next time
+                self._cache[cache_key] = None
+                _save_cache(self._cache)
                 return Result(err=f"No '{query}' detected in {Path(image_path).name}")
 
             detection_data: dict = {
@@ -82,6 +132,11 @@ class AI_Engine:
                 f"Detected {len(boxes)} object(s) for '{query}' "
                 f"in {Path(image_path).name}"
             )
+
+            # Cache and persist the positive result
+            self._cache[cache_key] = detection_data
+            _save_cache(self._cache)
+
             return Result(result=detection_data)
 
         except UnidentifiedImageError as e:

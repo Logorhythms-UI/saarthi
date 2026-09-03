@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
@@ -216,7 +217,7 @@ class frontend_engine:
                         "w-full items-stretch gap-4"
                     )
 
-                    def handle_search() -> None:
+                    async def handle_search() -> None:
                         """Run reverse-chronological object detection search."""
                         query: str = prompt_input.value.strip()
                         if not query:
@@ -232,7 +233,11 @@ class frontend_engine:
                                 "text-center text-gray-500 font-medium"
                             )
 
-                        result: Result = engine.backend.search(query)
+                        # Run the blocking inference in a thread so the UI stays responsive
+                        loop = asyncio.get_event_loop()
+                        result: Result = await loop.run_in_executor(
+                            None, engine.backend.search, query
+                        )
 
                         results_container.clear()
                         with results_container:
