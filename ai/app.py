@@ -158,6 +158,22 @@ class AI_Engine:
             # Re-raise unexpected exceptions so they are not silently swallowed
             raise
 
+    def clear_cache(self) -> None:
+        """Wipe the in-memory inference cache and delete the on-disk cache file.
+
+        Call this after deleting or re-labelling stored images so that
+        subsequent searches always re-run the model on fresh data.
+        """
+        self._cache = {}
+        if _CACHE_PATH.exists():
+            try:
+                _CACHE_PATH.unlink()
+                self.logger.info("Inference cache cleared from disk")
+            except OSError as e:
+                self.logger.warning(f"Failed to delete cache file: {e}")
+        else:
+            self.logger.info("No on-disk cache to delete")
+
     def draw_bounding_boxes(
         self,
         image_path: str,
