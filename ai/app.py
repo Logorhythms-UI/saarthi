@@ -92,9 +92,7 @@ class AI_Engine:
                     f"in {Path(image_path).name}"
                 )
                 return Result(err=f"No '{query}' detected in {Path(image_path).name}")
-            self.logger.info(
-                f"Cache hit for '{query}' in {Path(image_path).name}"
-            )
+            self.logger.info(f"Cache hit for '{query}' in {Path(image_path).name}")
             return Result(result=cached)
 
         try:

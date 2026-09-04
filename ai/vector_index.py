@@ -119,10 +119,52 @@ class VectorIndex:
 
         return results
 
+    def remove_objects(self, object_ids: list[int]) -> None:
+        """Remove specific object IDs from the FAISS index and the parallel mapping.
+
+        Args:
+            object_ids: List of database ObjectObservation primary keys to remove.
+        """
+        assert isinstance(object_ids, list), "object_ids must be a list"
+        if not object_ids:
+            return
+
+        object_ids_set = set(object_ids)
+
+        # 1. Find indices of objects to remove
+        indices_to_remove = [
+            i for i, obj_id in enumerate(self._object_ids) if obj_id in object_ids_set
+        ]
+
+        if not indices_to_remove:
+            return
+
+        # 2. Remove from FAISS index using IDSelectorBatch
+        # Note: IndexFlatIP supports remove_ids and will shift remaining indices down
+        sel = faiss.IDSelectorBatch(indices_to_remove)
+        self._index.remove_ids(sel)
+
+        # 3. Rebuild the parallel python list by omitting those indices
+        self._object_ids = [
+            obj_id
+            for i, obj_id in enumerate(self._object_ids)
+            if i not in indices_to_remove
+        ]
+
+        logger.info(
+            "VectorIndex '%s': removed %d objects", self._name, len(indices_to_remove)
+        )
+
+    def clear(self) -> None:
+        """Clear all vectors from the index and reset the mapping."""
+        self._index = faiss.IndexFlatIP(self._dimension)
+        self._object_ids = []
+        logger.info("VectorIndex '%s': completely cleared", self._name)
+
     def persist(self) -> None:
         """Write the FAISS index and id mapping to disk.
 
-        Called once after a batch of embeddings has been added, not after
+        Called once after a batch of embeddings has been added or removed, not after
         every individual add(), to avoid redundant I/O.
         """
         faiss.write_index(self._index, str(self._index_path))
