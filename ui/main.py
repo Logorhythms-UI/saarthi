@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
@@ -216,7 +217,7 @@ class frontend_engine:
                         "w-full items-stretch gap-4"
                     )
 
-                    def handle_search() -> None:
+                    async def handle_search() -> None:
                         """Run reverse-chronological object detection search."""
                         query: str = prompt_input.value.strip()
                         if not query:
@@ -232,7 +233,11 @@ class frontend_engine:
                                 "text-center text-gray-500 font-medium"
                             )
 
-                        result: Result = engine.backend.search(query)
+                        # Run the blocking inference in a thread so the UI stays responsive
+                        loop = asyncio.get_event_loop()
+                        result: Result = await loop.run_in_executor(
+                            None, engine.backend.search, query
+                        )
 
                         results_container.clear()
                         with results_container:
@@ -258,6 +263,19 @@ class frontend_engine:
                     ui.button("Search", on_click=handle_search).classes(
                         "primary-btn w-full text-lg"
                     )
+
+                    def handle_clear_cache() -> None:
+                        """Clear the AI inference cache so the next search re-runs inference."""
+                        engine.backend.clear_cache()
+                        ui.notify(
+                            "Inference cache cleared. Next search will re-run the model.",
+                            type="info",
+                        )
+                        engine.logger.info("Cache cleared from UI")
+
+                    ui.button("Clear Cache", on_click=handle_clear_cache).classes(
+                        "w-full text-base mt-2"
+                    ).props("flat color=grey-7")
 
     def run(self, title: str = "Saarthi", port: int = 8080) -> None:
         """Start the NiceGUI server. This call blocks."""

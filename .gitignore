@@ -1,5 +1,13 @@
 database.db
-__pycache__
-.vscode
-.venv
+__pycache__/
+*.pyc
+.env
+.venv/
+benchmarks/object-detection/images/
 storage/uploads/
+images/
+
+benchmarks/object-detection/benchmark_state*.json
+results.json
+weights/
+yolov8s-world.pt
