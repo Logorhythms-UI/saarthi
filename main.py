@@ -1,7 +1,7 @@
 import logging
 
-from backend.api import backend_api
-from ui.main import frontend_engine
+from backend.api import Backend
+from ui.main import Frontend
 
 logging.basicConfig(
     level=logging.INFO, format="MAIN - %(asctime)s - %(levelname)s - %(message)s"
@@ -12,13 +12,13 @@ logger: logging.Logger = logging.getLogger(__name__)
 def main() -> None:
     """Entry point for the Saarthi application.
 
-    Initialises the backend (which loads DB, storage, and AI model),
+    Initialises the backend (which loads DB, storage, and AI models),
     wires it into the frontend, and starts the NiceGUI server.
     """
     logger.info("Initialising Saarthi...")
 
-    backend: backend_api = backend_api()
-    frontend: frontend_engine = frontend_engine(backend)
+    backend: Backend = Backend()
+    frontend: Frontend = Frontend(backend)
     frontend.setup_routes()
 
     logger.info("All systems ready — launching UI")
