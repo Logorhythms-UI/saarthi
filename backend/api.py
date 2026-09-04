@@ -133,3 +133,13 @@ class backend_api:
 
         self.logger.info(f"No match for '{query}' in any image")
         return Result(err=f"'{query}' was not found in any stored image.")
+
+    def clear_cache(self) -> None:
+        """Clear the AI inference cache (in-memory and on-disk).
+
+        Useful after the image library is significantly updated so that
+        the next search always runs fresh inference rather than serving
+        stale cached results.
+        """
+        self.ai_api.clear_cache()
+        self.logger.info("Inference cache cleared via backend API")
