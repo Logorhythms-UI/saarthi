@@ -308,8 +308,8 @@ class Frontend:
                 with ui.card().classes("glass-card w-full"):
                     ui.label(
                         "Describe what you're looking for in natural language. "
-                        "The system will normalise your query and scan images "
-                        "from newest to oldest."
+                        "The system will normalise your query and search the "
+                        "indexed object memory."
                     ).classes("text-gray-500 mb-4")
 
                     query_input: ui.input = ui.input(
@@ -342,12 +342,14 @@ class Frontend:
 
                         results_container.clear()
                         with results_container:
-                            if result.ok:
-                                _render_search_result(result.result)
-                            else:
+                            if not result.ok:
                                 ui.label(result.err).classes(
                                     "text-lg text-center status-msg status-error"
                                 )
+                            elif result.result["status"] == "FOUND":
+                                _render_found_result(result.result)
+                            else:
+                                _render_not_found_result(result.result)
 
                     ui.button("Search", on_click=handle_search).classes(
                         "primary-btn w-full text-lg"
@@ -423,31 +425,44 @@ def _inject_css() -> None:
     ui.add_head_html(_SHARED_CSS)
 
 
-def _render_search_result(data: dict) -> None:
-    """Render a successful search result inside the current UI context."""
-    # Normalised query card
+def _render_found_result(data: dict) -> None:
+    """Render a successful FOUND search result inside the current UI context."""
+    # Normalised query
     with ui.card().classes("w-full p-4 bg-gray-50 rounded-xl"):
         ui.label("Normalised Query").classes("text-sm font-medium text-gray-400 mb-1")
         ui.label(data["normalized_query"]).classes(
             "text-lg font-semibold text-gray-800"
         )
 
-    # Detection metadata
-    detection: dict = data["detection"]
+    # Score metadata chips
     with ui.row().classes("flex-wrap gap-3"):
-        ui.label(f"{detection['label']}").classes("metadata-chip")
-        ui.label(f"Confidence: {detection['confidence']:.0%}").classes(
-            "metadata-chip"
-        )
+        ui.label(f"Score: {data['final_score']:.2f}").classes("metadata-chip")
+        ui.label(f"Semantic: {data['semantic_score']:.2f}").classes("metadata-chip")
+        ui.label(f"Grounding: {data['grounding_score']:.2f}").classes("metadata-chip")
+        ui.label(f"Candidates: {data['candidate_count']}").classes("metadata-chip")
         ui.label(f"Captured: {data['image_timestamp']}").classes("metadata-chip")
         ui.label(
-            f"Searched {data['images_searched']} of "
-            f"{data['total_images']} images"
-        ).classes("metadata-chip")
-        ui.label(
-            f"SLM: {data['slm_duration_s']}s | "
-            f"Detection: {data['search_duration_s']}s"
+            f"SLM: {data['slm_duration_s']}s | Search: {data['search_duration_s']}s"
         ).classes("metadata-chip")
 
-    # Annotated image with bounding box
-    ui.image(data["annotated_image_path"]).classes("result-image mx-auto mt-2")
+    # Original image — bounding box not required in user result (spec §18)
+    ui.image(data["image_path"]).classes("result-image mx-auto mt-2")
+
+
+def _render_not_found_result(data: dict) -> None:
+    """Render a NOT_FOUND search result inside the current UI context."""
+    with ui.card().classes("w-full p-4 rounded-xl"):
+        ui.label("Object Not Found").classes("text-xl font-bold status-error mb-2")
+        ui.label(f"Query: {data['normalized_query']}").classes(
+            "text-gray-700 font-medium mb-1"
+        )
+        ui.label(data["reason"]).classes("text-gray-500 text-sm mb-2")
+        if data.get("candidate_count", 0) > 0:
+            best: str = (
+                f"  Best score: {data['best_score']:.2f}"
+                if "best_score" in data
+                else ""
+            )
+            ui.label(
+                f"{data['candidate_count']} candidate(s) evaluated.{best}"
+            ).classes("metadata-chip")
