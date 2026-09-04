@@ -5,12 +5,9 @@ __pycache__/
 .venv/
 benchmarks/object-detection/images/
 storage/uploads/
-ai/models
-prompts/
 images/
 
 benchmarks/object-detection/benchmark_state*.json
-results.json
 weights/
 yolov8s-world.pt
 ai/models
