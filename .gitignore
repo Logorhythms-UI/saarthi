@@ -12,3 +12,6 @@ weights/
 yolov8s-world.pt
 ai/models
 prompts/
+
+base-context.txt
+mvp-pipeline.txt
