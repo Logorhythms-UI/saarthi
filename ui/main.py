@@ -202,15 +202,15 @@ class Frontend:
 
                 with ui.row().classes("gap-6 flex-wrap justify-center"):
                     ui.button(
-                        "📷  Upload Images",
+                        "Upload Images",
                         on_click=lambda: ui.navigate.to("/upload"),
                     ).classes("nav-btn")
                     ui.button(
-                        "🔍  Search Objects",
+                        "Search Objects",
                         on_click=lambda: ui.navigate.to("/search"),
                     ).classes("nav-btn")
                     ui.button(
-                        "🖼️  Browse Memory",
+                        "Browse Memory",
                         on_click=lambda: ui.navigate.to("/images"),
                     ).classes("nav-btn")
 
@@ -435,17 +435,17 @@ def _render_search_result(data: dict) -> None:
     # Detection metadata
     detection: dict = data["detection"]
     with ui.row().classes("flex-wrap gap-3"):
-        ui.label(f"🏷️  {detection['label']}").classes("metadata-chip")
-        ui.label(f"📊  Confidence: {detection['confidence']:.0%}").classes(
+        ui.label(f"{detection['label']}").classes("metadata-chip")
+        ui.label(f"Confidence: {detection['confidence']:.0%}").classes(
             "metadata-chip"
         )
-        ui.label(f"🕐  Captured: {data['image_timestamp']}").classes("metadata-chip")
+        ui.label(f"Captured: {data['image_timestamp']}").classes("metadata-chip")
         ui.label(
-            f"🔍  Searched {data['images_searched']} of "
+            f"Searched {data['images_searched']} of "
             f"{data['total_images']} images"
         ).classes("metadata-chip")
         ui.label(
-            f"⏱️  SLM: {data['slm_duration_s']}s | "
+            f"SLM: {data['slm_duration_s']}s | "
             f"Detection: {data['search_duration_s']}s"
         ).classes("metadata-chip")
 
