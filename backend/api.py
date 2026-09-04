@@ -31,11 +31,7 @@ class Backend:
     def __init__(self) -> None:
         self._storage: StorageEngine = StorageEngine()
         self._db: DatabaseEngine = DatabaseEngine()
-        self._query_normalizer: QueryNormalizer | None = None
-        try:
-            self._query_normalizer = QueryNormalizer()
-        except FileNotFoundError as e:
-            logger.warning("Natural-language search is unavailable: %s", e)
+        self._query_normalizer: QueryNormalizer = QueryNormalizer()
         self._object_detector: ObjectDetector = ObjectDetector()
         logger.info("Backend initialized — all subsystems ready")
 
@@ -165,14 +161,6 @@ class Backend:
         """
         assert isinstance(query, str), "query must be a string"
         assert len(query.strip()) > 0, "query must not be empty"
-
-        if self._query_normalizer is None:
-            return Result(
-                err=(
-                    "Natural-language search is unavailable because the GGUF "
-                    "query-normalizer model is not installed."
-                )
-            )
 
         total_start: float = time.perf_counter()
         logger.info("Search pipeline started — query: '%s'", query)
