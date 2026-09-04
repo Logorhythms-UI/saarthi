@@ -58,7 +58,8 @@ class SemanticEmbedder:
         inputs = self._processor(images=rgb_image, return_tensors="pt").to(self._device)
 
         with torch.no_grad():
-            raw: torch.Tensor = self._model.get_image_features(**inputs)
+            output = self._model.get_image_features(**inputs)
+            raw: torch.Tensor = getattr(output, "pooler_output", output)
 
         return _normalize(raw.cpu().float().numpy()[0])
 
@@ -80,7 +81,8 @@ class SemanticEmbedder:
         ).to(self._device)
 
         with torch.no_grad():
-            raw: torch.Tensor = self._model.get_text_features(**inputs)
+            output = self._model.get_text_features(**inputs)
+            raw: torch.Tensor = getattr(output, "pooler_output", output)
 
         return _normalize(raw.cpu().float().numpy()[0])
 

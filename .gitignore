@@ -16,3 +16,6 @@ prompts/
 base-context.txt
 mvp-pipeline.txt
 ai/indexes/
+*.db-shm
+*.db-wal
+*.pt
