@@ -147,3 +147,41 @@ class DatabaseEngine:
         if max_seq is None:
             return 1
         return max_seq + 1
+
+    def delete_image(self, image_id: int) -> list[int]:
+        """Delete an ImageHistory record and its associated ObjectObservations.
+
+        Args:
+            image_id: Primary key of the ImageHistory record.
+
+        Returns:
+            List of ObjectObservation primary keys that were deleted.
+        """
+        assert (
+            isinstance(image_id, int) and image_id > 0
+        ), "image_id must be a positive int"
+
+        # 1. Get the object IDs associated with this image before deletion
+        # so we can pass them to FAISS for removal.
+        obs_ids = [
+            obs.id
+            for obs in ObjectObservation.select(ObjectObservation.id).where(
+                ObjectObservation.image_id == image_id
+            )
+        ]
+
+        # 2. Delete the image (ObjectObservations will be cascade deleted)
+        record = ImageHistory.get_or_none(ImageHistory.id == image_id)
+        if record:
+            record.delete_instance()
+            logger.info(
+                "Deleted image (id=%d) and %d observations", image_id, len(obs_ids)
+            )
+
+        return obs_ids
+
+    def clear_all(self) -> None:
+        """Clear all ImageHistory and ObjectObservation records from the database."""
+        ObjectObservation.delete().execute()
+        ImageHistory.delete().execute()
+        logger.info("Database cleared of all image and observation records")
