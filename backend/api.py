@@ -359,6 +359,94 @@ class Backend:
         """Return all image records ordered newest-first by sequence number."""
         return self._db.get_all_images_desc()
 
+    def delete_image(self, image_id: int) -> Result:
+        """Delete an image, its object observations, and its vector embeddings.
+
+        Args:
+            image_id: Primary key of the ImageHistory record.
+
+        Returns:
+            Result with None on success, or an error message on failure.
+        """
+        assert isinstance(image_id, int), "image_id must be an integer"
+
+        image_record = self._db.get_image_by_id(image_id)
+        if not image_record:
+            return Result(err=f"Image with id {image_id} not found")
+
+        image_path = image_record.imgpath
+
+        # 1. Delete from DB and get removed object IDs
+        try:
+            removed_obs_ids: list[int] = self._db.delete_image(image_id)
+        except OSError as e:
+            logger.error("Failed to delete image %d from DB: %s", image_id, e)
+            return Result(err=f"Database error during deletion: {e}")
+
+        # 2. Remove physical file
+        try:
+            p = Path(image_path)
+            if p.exists():
+                p.unlink()
+        except OSError as e:
+            logger.warning("Could not delete physical file %s: %s", image_path, e)
+            # Continue anyway since it's removed from DB
+
+        # 3. Remove vectors from FAISS
+        if removed_obs_ids:
+            try:
+                self._semantic_index.remove_objects(removed_obs_ids)
+                self._semantic_index.persist()
+
+                self._visual_index.remove_objects(removed_obs_ids)
+                self._visual_index.persist()
+            except (RuntimeError, ValueError, OSError) as e:
+                logger.error("Failed to remove vectors for image %d: %s", image_id, e)
+                # Keep going, the DB is the source of truth
+
+        logger.info("Successfully deleted image %d", image_id)
+        return Result(result=None)
+
+    def clear_all_memory(self) -> Result:
+        """Wipe all images, objects, and embeddings from the system.
+
+        Returns:
+            Result with None on success.
+        """
+        logger.info("Initiating clear all memory...")
+
+        # 1. Clear physical files
+        try:
+            upload_dir = Path(self._storage.uploads_dir)
+            if upload_dir.exists():
+                for f in upload_dir.glob("*"):
+                    if f.is_file():
+                        f.unlink()
+        except OSError as e:
+            logger.error("Failed to clear upload directory: %s", e)
+            return Result(err=f"Failed to clear physical files: {e}")
+
+        # 2. Clear Database
+        try:
+            self._db.clear_all()
+        except OSError as e:
+            logger.error("Failed to clear database: %s", e)
+            return Result(err=f"Failed to clear database: {e}")
+
+        # 3. Clear Vector Indexes
+        try:
+            self._semantic_index.clear()
+            self._semantic_index.persist()
+
+            self._visual_index.clear()
+            self._visual_index.persist()
+        except (RuntimeError, ValueError, OSError) as e:
+            logger.error("Failed to clear vector indexes: %s", e)
+            return Result(err=f"Failed to clear vector indexes: {e}")
+
+        logger.info("Successfully cleared all memory")
+        return Result(result=None)
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

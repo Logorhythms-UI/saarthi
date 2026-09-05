@@ -363,17 +363,54 @@ class Frontend:
         def _images_page() -> None:
             _inject_css()
             with ui.column().classes("w-full max-w-6xl mx-auto p-6 items-stretch"):
-                # Header
-                with ui.row().classes("items-center mb-6"):
-                    ui.button(
-                        icon="arrow_back",
-                        on_click=lambda: ui.navigate.to("/"),
-                    ).props("flat round")
-                    ui.label("Memory Browser").classes(
-                        "text-3xl font-bold gradient-text"
-                    )
+                with ui.row().classes("items-center justify-between mb-6 w-full"):
+                    with ui.row().classes("items-center"):
+                        ui.button(
+                            icon="arrow_back",
+                            on_click=lambda: ui.navigate.to("/"),
+                        ).props("flat round")
+                        ui.label("Memory Browser").classes(
+                            "text-3xl font-bold gradient-text"
+                        )
 
-                images: list = engine._backend.get_all_images_desc()
+                    images: list = engine._backend.get_all_images_desc()
+
+                    if images:
+
+                        async def confirm_clear() -> None:
+                            with ui.dialog() as dialog, ui.card():
+                                ui.label("Are you sure?").classes(
+                                    "text-xl font-bold mb-2"
+                                )
+                                ui.label(
+                                    "This will permanently delete all images and memory."
+                                ).classes("mb-4")
+                                with ui.row():
+                                    ui.button("Cancel", on_click=dialog.close).props(
+                                        "flat"
+                                    )
+
+                                    def perform_clear() -> None:
+                                        result = engine._backend.clear_all_memory()
+                                        if result.ok:
+                                            ui.notify(
+                                                "All memory cleared", type="positive"
+                                            )
+                                            dialog.close()
+                                            ui.navigate.to("/images")
+                                        else:
+                                            ui.notify(result.err, type="negative")
+
+                                    ui.button(
+                                        "Clear All",
+                                        color="negative",
+                                        on_click=perform_clear,
+                                    )
+                            dialog.open()
+
+                        ui.button(
+                            "Clear All", on_click=confirm_clear, color="red-5"
+                        ).classes("font-semibold rounded-lg")
 
                 if not images:
                     with ui.element("div").classes("empty-state w-full"):
@@ -401,7 +438,22 @@ class Frontend:
                         filename: str = Path(img_path).name
                         seq: int = total - rank + 1
 
-                        with ui.element("div").classes("image-tile"):
+                        with ui.element("div").classes("image-tile relative"):
+                            # Delete overlay button
+                            def delete_handler(target_id=int(record.id)) -> None:
+                                result = engine._backend.delete_image(target_id)
+                                if result.ok:
+                                    ui.notify("Image deleted", type="positive")
+                                    ui.navigate.to("/images")
+                                else:
+                                    ui.notify(result.err, type="negative")
+
+                            ui.button(
+                                icon="delete", color="red", on_click=delete_handler
+                            ).props("round flat size=sm").classes(
+                                "absolute top-2 right-2 bg-white/80 hover:bg-white text-red-500 z-10"
+                            )
+
                             ui.image(img_path).style(
                                 "width: 100%; height: 180px; object-fit: cover;"
                             )

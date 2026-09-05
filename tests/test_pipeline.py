@@ -618,3 +618,110 @@ class TestSearchPipeline:
         result = backend.search("glasses")
         assert result.ok
         assert result.result["status"] == "NOT_FOUND"
+
+
+class TestDeletionPipeline:
+    def test_vector_index_deletion(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("ai.vector_index._INDEX_DIR", tmp_path)
+        from ai.vector_index import VectorIndex
+
+        idx = VectorIndex("test_del", 64)
+        v1 = _unit_vector(64, seed=1)
+        v2 = _unit_vector(64, seed=2)
+        v3 = _unit_vector(64, seed=3)
+
+        idx.add(v1, 10)
+        idx.add(v2, 20)
+        idx.add(v3, 30)
+
+        assert idx.size == 3
+        idx.remove_objects([10, 30])
+        assert idx.size == 1
+
+        # Searching for v2 should still yield 20
+        res = idx.search(v2, k=1)
+        assert res[0][0] == 20
+
+        # Clear
+        idx.clear()
+        assert idx.size == 0
+        assert idx.search(v2, k=1) == []
+
+    def test_db_deletion(self, temp_db, tmp_path):
+        img1 = tmp_path / "del1.jpg"
+        img1.write_bytes(b"fake")
+        img2 = tmp_path / "del2.jpg"
+        img2.write_bytes(b"fake")
+
+        r1 = temp_db.add_image(str(img1))
+        r2 = temp_db.add_image(str(img2))
+
+        o1 = temp_db.add_object_observation(
+            int(r1.id), "a", 0.9, "[]", datetime.datetime.now(datetime.UTC)
+        )
+        temp_db.add_object_observation(
+            int(r2.id), "b", 0.9, "[]", datetime.datetime.now(datetime.UTC)
+        )
+
+        assert temp_db.get_image_count() == 2
+
+        deleted_obs = temp_db.delete_image(int(r1.id))
+        assert deleted_obs == [o1]
+
+        assert temp_db.get_image_count() == 1
+        assert temp_db.get_image_by_id(int(r1.id)) is None
+        assert temp_db.get_object_observations_by_ids([o1]) == []
+
+        temp_db.clear_all()
+        assert temp_db.get_image_count() == 0
+
+    def test_backend_orchestration_delete_image(self, mock_backend):
+        backend, tmp_path = mock_backend
+
+        img_path = tmp_path / "backend_del.jpg"
+        _write_fake_image(img_path)
+
+        from ai.broad_detector import Detection
+
+        backend._mock_broad.detect.return_value = [
+            Detection(label="bag", confidence=0.9, bounding_box=[0, 0, 16, 16])
+        ]
+        backend._mock_semantic.embed_image.return_value = _unit_vector(768, seed=1)
+        backend._mock_visual.embed.return_value = _unit_vector(384, seed=2)
+
+        result = backend.ingest_image(str(img_path))
+        assert result.ok
+        assert backend._semantic_index.size == 1
+
+        images = backend.get_all_images_desc()
+        assert len(images) == 1
+
+        # Now delete
+        del_res = backend.delete_image(int(images[0].id))
+        assert del_res.ok
+
+        # Verify
+        assert backend.get_image_count() == 0
+        assert backend._semantic_index.size == 0
+        assert not img_path.exists()
+
+    def test_backend_orchestration_clear_all(self, mock_backend):
+        backend, tmp_path = mock_backend
+
+        # Ingest 2 images
+        img_path1 = tmp_path / "backend_clr1.jpg"
+        img_path2 = tmp_path / "backend_clr2.jpg"
+        _write_fake_image(img_path1)
+        _write_fake_image(img_path2)
+
+        backend._mock_broad.detect.return_value = []
+        backend.ingest_image(str(img_path1))
+        backend.ingest_image(str(img_path2))
+
+        assert backend.get_image_count() == 2
+
+        # Call clear_all_memory
+        res = backend.clear_all_memory()
+        assert res.ok
+
+        assert backend.get_image_count() == 0
