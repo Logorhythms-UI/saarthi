@@ -17,6 +17,10 @@ SEMANTIC_TOP_K: int = 20
 SEMANTIC_WEIGHT: float = 0.40  # SigLIP2 text-to-image similarity
 VISUAL_WEIGHT: float = 0.25  # DINOv2 visual similarity
 GROUNDING_WEIGHT: float = 0.35  # Grounding DINO Tiny detection confidence
+RECENCY_WEIGHT: float = 0.15  # Recent observations are more likely to be intended
+
+# Exponential decay half-life for observation timestamps.
+RECENCY_HALF_LIFE_HOURS: float = 24.0
 
 # --- Match decision ---
 
