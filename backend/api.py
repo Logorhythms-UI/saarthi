@@ -5,6 +5,7 @@ a clean interface for the UI.
 """
 
 import logging
+import tempfile
 import time
 from pathlib import Path
 
@@ -91,6 +92,54 @@ class Backend:
 
         logger.info("Ingested image: %s", stored_path)
         return Result(result=stored_path)
+
+    def ingest_zip(self, file_content: bytes, filename: str) -> Result:
+        """Extract a ZIP upload and register each extracted image in the DB."""
+        assert isinstance(file_content, bytes), "file_content must be bytes"
+        assert isinstance(filename, str), "filename must be a string"
+        assert len(file_content) > 0, "file_content must not be empty"
+
+        if Path(filename).suffix.lower() != ".zip":
+            return Result(err="Only ZIP uploads are supported")
+
+        try:
+            with tempfile.TemporaryDirectory() as temporary_directory:
+                zip_path: Path = Path(temporary_directory) / "upload.zip"
+                zip_path.write_bytes(file_content)
+                extracted_paths: list[str] = self._storage.extract_zip(str(zip_path))
+        except (AssertionError, OSError, ValueError) as e:
+            logger.error("Failed to extract ZIP upload '%s': %s", filename, e)
+            return Result(err=f"Failed to extract ZIP: {e}")
+
+        uploaded: list[str] = []
+        failed: list[str] = []
+        for image_path in extracted_paths:
+            image_name: str = Path(image_path).name
+            try:
+                self._db.add_image(image_path)
+            except IntegrityError as e:
+                logger.error(
+                    "Failed to register extracted image '%s': %s", image_name, e
+                )
+                failed.append(image_name)
+            except (AssertionError, OSError) as e:
+                logger.error(
+                    "Failed to register extracted image '%s': %s", image_name, e
+                )
+                failed.append(image_name)
+            else:
+                uploaded.append(image_name)
+
+        if not extracted_paths:
+            return Result(err="ZIP did not contain any supported images")
+
+        logger.info(
+            "Ingested ZIP '%s': %d uploaded, %d failed",
+            filename,
+            len(uploaded),
+            len(failed),
+        )
+        return Result(result={"uploaded": uploaded, "failed": failed})
 
     def search(self, query: str) -> Result:
         """Execute the full search pipeline: SLM normalisation → DINO detection.

@@ -12,6 +12,10 @@ Edge Efficient Episodic Memory Aid
 1. Update the `pre-commit` to use the latest versions of `ruff` and `black` with `pre-commit autoupdate` in this project directory.
 1. That's it! You're good to begin development :)
 
+## Mobile Image Upload
+
+Start Saarthi with `python main.py`, then open `http://<computer-ip>:8080/mobile-upload` on a phone connected to the same Wi-Fi network. The mobile page accepts camera captures and gallery selections. One image uses `POST /api/v1/images`; multiple images are packaged in the browser as a ZIP and use `POST /api/v1/images/zip`.
+
 ## A few ground rules
 
 1. This project is divided into modules, and each module has its own readme stating its purpose.
