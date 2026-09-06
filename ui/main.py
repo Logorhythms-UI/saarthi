@@ -653,8 +653,8 @@ def _render_found_result(data: dict) -> None:
 
     # Score metadata chips
     with ui.row().classes("flex-wrap gap-3"):
-        ui.label(f"{detection['label']}").classes("metadata-chip")
-        ui.label(f"Confidence: {detection['confidence']:.0%}").classes("metadata-chip")
+        ui.label(f"Score: {data['final_score']:.2f}").classes("metadata-chip")
+        ui.label(f"Grounding: {data['grounding_score']:.0%}").classes("metadata-chip")
         ui.label(f"Captured: {data['image_timestamp']}").classes("metadata-chip")
         ui.label(
             f"Searched {data['images_searched']} of " f"{data['total_images']} images"
@@ -666,3 +666,18 @@ def _render_found_result(data: dict) -> None:
 
     # Annotated image with bounding box
     ui.image(data["annotated_image_path"]).classes("result-image mx-auto mt-2")
+
+
+def _render_not_found_result(data: dict) -> None:
+    """Render a NOT_FOUND search result inside the current UI context."""
+    with ui.card().classes("w-full p-4 bg-gray-50 rounded-xl"):
+        ui.label("No matching image found").classes(
+            "text-xl font-semibold text-gray-800"
+        )
+        ui.label(data["reason"]).classes("text-gray-500 mt-2")
+
+    with ui.row().classes("flex-wrap gap-3"):
+        ui.label(f"Searched for: {data['normalized_query']}").classes("metadata-chip")
+        ui.label(f"Candidates: {data['candidate_count']}").classes("metadata-chip")
+        if "best_score" in data:
+            ui.label(f"Best score: {data['best_score']:.2f}").classes("metadata-chip")
