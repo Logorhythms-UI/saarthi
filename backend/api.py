@@ -4,6 +4,7 @@ Coordinates AI models, database, and storage to provide
 a clean interface for the UI.
 """
 
+import datetime
 import json
 import logging
 import time
@@ -55,6 +56,7 @@ def _compute_final_score(
     semantic_score: float,
     visual_score: float,
     grounding_score: float,
+    recency_score: float = 0.0,
 ) -> float:
     """Calibrate each raw signal to [0, 1], then combine with config weights.
 
@@ -72,11 +74,45 @@ def _compute_final_score(
     grounding_cal: float = _calibrate(
         grounding_score, config.GROUNDING_FLOOR, config.GROUNDING_CEILING
     )
-    return (
+    base_score: float = (
         config.SEMANTIC_WEIGHT * semantic_cal
         + config.VISUAL_WEIGHT * visual_cal
         + config.GROUNDING_WEIGHT * grounding_cal
     )
+    return (
+        1.0 - config.RECENCY_WEIGHT
+    ) * base_score + config.RECENCY_WEIGHT * recency_score
+
+
+def _compute_recency_score(
+    timestamp: datetime.datetime,
+    now: datetime.datetime | None = None,
+) -> float:
+    """Return an exponential recency score in [0, 1].
+
+    A score of 1.0 represents a current or future observation. The score
+    halves every RECENCY_HALF_LIFE_HOURS, making recent memories preferable
+    without making older memories impossible to retrieve.
+    """
+    assert isinstance(timestamp, datetime.datetime), "timestamp must be a datetime"
+    if now is None:
+        now = datetime.datetime.now(timestamp.tzinfo)
+    assert isinstance(now, datetime.datetime), "now must be a datetime"
+
+    if timestamp.tzinfo is None and now.tzinfo is not None:
+        now = now.replace(tzinfo=None)
+    elif timestamp.tzinfo is not None and now.tzinfo is None:
+        now = now.replace(tzinfo=datetime.UTC)
+    elif timestamp.tzinfo is not None and now.tzinfo is not None:
+        timestamp = timestamp.astimezone(datetime.UTC)
+        now = now.astimezone(datetime.UTC)
+
+    age_hours: float = max(0.0, (now - timestamp).total_seconds() / 3600.0)
+    half_life: float = config.RECENCY_HALF_LIFE_HOURS
+    if half_life <= 0.0:
+        logger.warning("Invalid recency half-life: %.2f", half_life)
+        return 0.0
+    return 2.0 ** (-age_hours / half_life)
 
 
 def _iou(box_a: list[float], box_b: list[float]) -> float:
@@ -370,10 +406,12 @@ class Backend:
                     detect_result.err,
                 )
 
+            recency_score: float = _compute_recency_score(image_record.timestamp)
             final_score: float = _compute_final_score(
                 semantic_score=semantic_score,
                 visual_score=visual_score,
                 grounding_score=grounding_score,
+                recency_score=recency_score,
             )
 
             scored_candidates.append(
@@ -385,6 +423,7 @@ class Backend:
                     "semantic_score": round(semantic_score, 4),
                     "visual_score": round(visual_score, 4),
                     "grounding_score": round(grounding_score, 4),
+                    "recency_score": round(recency_score, 4),
                     "final_score": round(final_score, 4),
                     "bounding_box": gd_box if detect_result.ok else obs_box,
                     "detected_label": (
