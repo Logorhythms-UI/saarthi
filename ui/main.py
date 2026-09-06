@@ -3,14 +3,18 @@
 Provides four routes:
     /       — Landing page with navigation
     /upload — Single-image temporal upload
+    /mobile-upload — Mobile camera/gallery upload
     /search — Natural-language object search with bounding-box results
     /images — Reverse-chronological image gallery
 """
 
 import logging
 from pathlib import Path
+from typing import Annotated
 
-from nicegui import run, ui
+from fastapi import File, UploadFile
+from fastapi.responses import JSONResponse
+from nicegui import app, run, ui
 from nicegui.events import UploadEventArguments
 
 from backend.api import Backend
@@ -180,9 +184,163 @@ class Frontend:
         """Register all NiceGUI page routes."""
         self._register_landing_page()
         self._register_upload_page()
+        self._register_mobile_upload_page()
         self._register_search_page()
         self._register_images_page()
-        logger.info("All routes registered: /, /upload, /search, /images")
+        self._register_mobile_upload_api()
+        logger.info(
+            "All routes registered: /, /upload, /mobile-upload, /search, "
+            "/images, POST /api/v1/images, POST /api/v1/images/zip"
+        )
+
+    def _register_mobile_upload_api(self) -> None:
+        """Register unauthenticated mobile image and ZIP upload endpoints."""
+        engine: Frontend = self
+
+        @app.post("/api/v1/images", status_code=201)
+        async def _upload_image(
+            file: Annotated[UploadFile, File(...)],
+        ) -> dict | JSONResponse:
+            if not file.filename:
+                return JSONResponse(
+                    status_code=400, content={"error": "An image file is required"}
+                )
+
+            try:
+                file_content: bytes = await file.read()
+                result: Result = await run.io_bound(
+                    engine._backend.ingest_upload, file_content, file.filename
+                )
+            finally:
+                await file.close()
+
+            if not result.ok:
+                return JSONResponse(status_code=400, content={"error": result.err})
+
+            return {"uploaded": [file.filename], "failed": []}
+
+        @app.post("/api/v1/images/zip", status_code=201)
+        async def _upload_zip(
+            file: Annotated[UploadFile, File(...)],
+        ) -> dict | JSONResponse:
+            if not file.filename:
+                return JSONResponse(
+                    status_code=400, content={"error": "A ZIP file is required"}
+                )
+
+            try:
+                file_content: bytes = await file.read()
+                result: Result = await run.io_bound(
+                    engine._backend.ingest_zip, file_content, file.filename
+                )
+            finally:
+                await file.close()
+
+            if not result.ok:
+                return JSONResponse(status_code=400, content={"error": result.err})
+
+            return result.result
+
+    def _register_mobile_upload_page(self) -> None:
+        """Register the mobile camera/gallery upload page."""
+
+        @ui.page("/mobile-upload")
+        def _mobile_upload_page() -> None:
+            _inject_css()
+            ui.add_head_html(
+                '<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>'
+            )
+            with ui.column().classes("w-full max-w-3xl mx-auto p-6 items-stretch"):
+                with ui.row().classes("items-center mb-6"):
+                    ui.button(
+                        icon="arrow_back",
+                        on_click=lambda: ui.navigate.to("/"),
+                    ).props("flat round")
+                    ui.label("Capture Memories").classes(
+                        "text-3xl font-bold gradient-text"
+                    )
+
+                with ui.card().classes("glass-card w-full"):
+                    ui.label(
+                        "Take a picture or choose images from your gallery. "
+                        "Multiple images are sent together as one ZIP."
+                    ).classes("text-gray-500 mb-4")
+                    ui.html(
+                        """
+                        <input id="mobile-images" type="file" accept="image/*" multiple
+                               capture="environment"
+                               class="w-full border-2 border-dashed border-gray-300 rounded-xl p-4 bg-gray-50/50">
+                        <button id="mobile-upload-button" type="button"
+                                class="primary-btn w-full text-lg mt-4">
+                            Upload selected images
+                        </button>
+                        <div id="mobile-upload-status" class="status-msg status-info mt-4">
+                            No images selected.
+                        </div>
+                        <script>
+                            (() => {
+                                const input = document.getElementById('mobile-images');
+                                const button = document.getElementById('mobile-upload-button');
+                                const status = document.getElementById('mobile-upload-status');
+
+                                const setStatus = (message, kind) => {
+                                    status.textContent = message;
+                                    status.className = `status-msg status-${kind} mt-4`;
+                                };
+
+                                button.addEventListener('click', async () => {
+                                    const files = Array.from(input.files || []);
+                                    if (files.length === 0) {
+                                        setStatus('Select at least one image.', 'error');
+                                        return;
+                                    }
+
+                                    button.disabled = true;
+                                    setStatus(`Uploading ${files.length} image(s)...`, 'info');
+                                    try {
+                                        let body;
+                                        let filename;
+                                        if (files.length === 1) {
+                                            body = new FormData();
+                                            body.append('file', files[0], files[0].name);
+                                            filename = files[0].name;
+                                        } else {
+                                            const archive = new JSZip();
+                                            files.forEach((file) => archive.file(file.name, file));
+                                            const zip = await archive.generateAsync({type: 'blob'});
+                                            body = new FormData();
+                                            filename = 'mobile-images.zip';
+                                            body.append('file', zip, filename);
+                                        }
+
+                                        const endpoint = files.length === 1
+                                            ? '/api/v1/images'
+                                            : '/api/v1/images/zip';
+                                        const response = await fetch(endpoint, {
+                                            method: 'POST',
+                                            body,
+                                        });
+                                        const result = await response.json();
+                                        if (!response.ok) {
+                                            throw new Error(result.error || 'Upload failed.');
+                                        }
+
+                                        setStatus(
+                                            `Uploaded ${result.uploaded.length} image(s).`,
+                                            'success'
+                                        );
+                                        input.value = '';
+                                    } catch (error) {
+                                        setStatus(error.message, 'error');
+                                    } finally {
+                                        button.disabled = false;
+                                    }
+                                });
+                            })();
+                        </script>
+                        """,
+                        sanitize=False,
+                    )
 
     def _register_landing_page(self) -> None:
         """Register the / landing page route."""
@@ -204,6 +362,10 @@ class Frontend:
                     ui.button(
                         "Upload Images",
                         on_click=lambda: ui.navigate.to("/upload"),
+                    ).classes("nav-btn")
+                    ui.button(
+                        "Mobile Capture",
+                        on_click=lambda: ui.navigate.to("/mobile-upload"),
                     ).classes("nav-btn")
                     ui.button(
                         "Search Objects",
@@ -464,12 +626,15 @@ class Frontend:
                                 ui.label(filename).classes("image-tile-name")
                                 ui.label(timestamp).classes("image-tile-ts")
 
-    def run(self, title: str = "Saarthi", port: int = 8080) -> None:
+    def run(
+        self, title: str = "Saarthi", port: int = 8080, host: str = "0.0.0.0"
+    ) -> None:
         """Start the NiceGUI server.  This call blocks."""
         assert isinstance(title, str), "title must be a string"
         assert isinstance(port, int), "port must be an integer"
-        logger.info("Starting Saarthi UI on port %d", port)
-        ui.run(title=title, port=port, reload=False)
+        assert isinstance(host, str), "host must be a string"
+        logger.info("Starting Saarthi UI on %s:%d", host, port)
+        ui.run(title=title, port=port, host=host, reload=False)
 
 
 def _inject_css() -> None:
@@ -489,32 +654,30 @@ def _render_found_result(data: dict) -> None:
     # Score metadata chips
     with ui.row().classes("flex-wrap gap-3"):
         ui.label(f"Score: {data['final_score']:.2f}").classes("metadata-chip")
-        ui.label(f"Semantic: {data['semantic_score']:.2f}").classes("metadata-chip")
-        ui.label(f"Grounding: {data['grounding_score']:.2f}").classes("metadata-chip")
-        ui.label(f"Candidates: {data['candidate_count']}").classes("metadata-chip")
+        ui.label(f"Grounding: {data['grounding_score']:.0%}").classes("metadata-chip")
         ui.label(f"Captured: {data['image_timestamp']}").classes("metadata-chip")
         ui.label(
-            f"SLM: {data['slm_duration_s']}s | Search: {data['search_duration_s']}s"
+            f"Searched {data['images_searched']} of " f"{data['total_images']} images"
+        ).classes("metadata-chip")
+        ui.label(
+            f"SLM: {data['slm_duration_s']}s | "
+            f"Detection: {data['search_duration_s']}s"
         ).classes("metadata-chip")
 
-    # Original image — bounding box not required in user result (spec §18)
-    ui.image(data["image_path"]).classes("result-image mx-auto mt-2")
+    # Annotated image with bounding box
+    ui.image(data["annotated_image_path"]).classes("result-image mx-auto mt-2")
 
 
 def _render_not_found_result(data: dict) -> None:
     """Render a NOT_FOUND search result inside the current UI context."""
-    with ui.card().classes("w-full p-4 rounded-xl"):
-        ui.label("Object Not Found").classes("text-xl font-bold status-error mb-2")
-        ui.label(f"Query: {data['normalized_query']}").classes(
-            "text-gray-700 font-medium mb-1"
+    with ui.card().classes("w-full p-4 bg-gray-50 rounded-xl"):
+        ui.label("No matching image found").classes(
+            "text-xl font-semibold text-gray-800"
         )
-        ui.label(data["reason"]).classes("text-gray-500 text-sm mb-2")
-        if data.get("candidate_count", 0) > 0:
-            best: str = (
-                f"  Best score: {data['best_score']:.2f}"
-                if "best_score" in data
-                else ""
-            )
-            ui.label(
-                f"{data['candidate_count']} candidate(s) evaluated.{best}"
-            ).classes("metadata-chip")
+        ui.label(data["reason"]).classes("text-gray-500 mt-2")
+
+    with ui.row().classes("flex-wrap gap-3"):
+        ui.label(f"Searched for: {data['normalized_query']}").classes("metadata-chip")
+        ui.label(f"Candidates: {data['candidate_count']}").classes("metadata-chip")
+        if "best_score" in data:
+            ui.label(f"Best score: {data['best_score']:.2f}").classes("metadata-chip")
