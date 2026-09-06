@@ -10,16 +10,16 @@ import time
 from pathlib import Path
 
 import numpy as np
-from ai.broad_detector import BroadDetector, Detection
-from ai.visual_embedder import VisualEmbedder
 from peewee import IntegrityError
 from PIL import Image, UnidentifiedImageError
 
 import config
+from ai.broad_detector import BroadDetector, Detection
 from ai.object_detector import ObjectDetector
 from ai.query_normalizer import QueryNormalizer
 from ai.semantic_embedder import SemanticEmbedder
 from ai.vector_index import VectorIndex
+from ai.visual_embedder import VisualEmbedder
 from db.api import DatabaseEngine
 from db.schema import ImageHistory, ObjectObservation
 from storage.app import StorageEngine
@@ -497,6 +497,9 @@ class Backend:
         # 2. Remove physical file
         try:
             self._storage.delete_file(image_path)
+            source_path = Path(image_path)
+            if source_path.exists():
+                source_path.unlink()
         except (ValueError, OSError) as e:
             logger.warning("Could not delete physical file %s: %s", image_path, e)
             # Continue anyway since it's removed from DB
