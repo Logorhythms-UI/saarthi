@@ -5,6 +5,7 @@ phrases suitable for an open-vocabulary object detector.
 """
 
 import logging
+import re
 import time
 from pathlib import Path
 
@@ -74,6 +75,12 @@ class QueryNormalizer:
             return Result(err="Query is empty")
         if len(stripped_query) > _MAX_INPUT_LENGTH:
             return Result(err="Query is too long")
+
+        # A single noun is already a valid detector phrase. Skipping the SLM
+        # prevents a small model from replacing the object with an invented
+        # attribute, such as turning "bottle" into "white".
+        if re.fullmatch(r"[\w-]+", stripped_query):
+            return Result(result=stripped_query)
 
         logger.info("Normalizing query: '%s'", stripped_query)
         start: float = time.perf_counter()
