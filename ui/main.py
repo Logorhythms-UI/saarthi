@@ -470,8 +470,8 @@ class Frontend:
                 with ui.card().classes("glass-card w-full"):
                     ui.label(
                         "Describe what you're looking for in natural language. "
-                        "The system will normalise your query and scan images "
-                        "from newest to oldest."
+                        "The system will normalise your query and search the "
+                        "indexed object memory."
                     ).classes("text-gray-500 mb-4")
 
                     query_input: ui.input = ui.input(
@@ -504,12 +504,14 @@ class Frontend:
 
                         results_container.clear()
                         with results_container:
-                            if result.ok:
-                                _render_search_result(result.result)
-                            else:
+                            if not result.ok:
                                 ui.label(result.err).classes(
                                     "text-lg text-center status-msg status-error"
                                 )
+                            elif result.result["status"] == "FOUND":
+                                _render_found_result(result.result)
+                            else:
+                                _render_not_found_result(result.result)
 
                     ui.button("Search", on_click=handle_search).classes(
                         "primary-btn w-full text-lg"
@@ -523,17 +525,54 @@ class Frontend:
         def _images_page() -> None:
             _inject_css()
             with ui.column().classes("w-full max-w-6xl mx-auto p-6 items-stretch"):
-                # Header
-                with ui.row().classes("items-center mb-6"):
-                    ui.button(
-                        icon="arrow_back",
-                        on_click=lambda: ui.navigate.to("/"),
-                    ).props("flat round")
-                    ui.label("Memory Browser").classes(
-                        "text-3xl font-bold gradient-text"
-                    )
+                with ui.row().classes("items-center justify-between mb-6 w-full"):
+                    with ui.row().classes("items-center"):
+                        ui.button(
+                            icon="arrow_back",
+                            on_click=lambda: ui.navigate.to("/"),
+                        ).props("flat round")
+                        ui.label("Memory Browser").classes(
+                            "text-3xl font-bold gradient-text"
+                        )
 
-                images: list = engine._backend.get_all_images_desc()
+                    images: list = engine._backend.get_all_images_desc()
+
+                    if images:
+
+                        async def confirm_clear() -> None:
+                            with ui.dialog() as dialog, ui.card():
+                                ui.label("Are you sure?").classes(
+                                    "text-xl font-bold mb-2"
+                                )
+                                ui.label(
+                                    "This will permanently delete all images and memory."
+                                ).classes("mb-4")
+                                with ui.row():
+                                    ui.button("Cancel", on_click=dialog.close).props(
+                                        "flat"
+                                    )
+
+                                    def perform_clear() -> None:
+                                        result = engine._backend.clear_all_memory()
+                                        if result.ok:
+                                            ui.notify(
+                                                "All memory cleared", type="positive"
+                                            )
+                                            dialog.close()
+                                            ui.navigate.to("/images")
+                                        else:
+                                            ui.notify(result.err, type="negative")
+
+                                    ui.button(
+                                        "Clear All",
+                                        color="negative",
+                                        on_click=perform_clear,
+                                    )
+                            dialog.open()
+
+                        ui.button(
+                            "Clear All", on_click=confirm_clear, color="red-5"
+                        ).classes("font-semibold rounded-lg")
 
                 if not images:
                     with ui.element("div").classes("empty-state w-full"):
@@ -561,7 +600,22 @@ class Frontend:
                         filename: str = Path(img_path).name
                         seq: int = total - rank + 1
 
-                        with ui.element("div").classes("image-tile"):
+                        with ui.element("div").classes("image-tile relative"):
+                            # Delete overlay button
+                            def delete_handler(target_id=int(record.id)) -> None:
+                                result = engine._backend.delete_image(target_id)
+                                if result.ok:
+                                    ui.notify("Image deleted", type="positive")
+                                    ui.navigate.to("/images")
+                                else:
+                                    ui.notify(result.err, type="negative")
+
+                            ui.button(
+                                icon="delete", color="red", on_click=delete_handler
+                            ).props("round flat size=sm").classes(
+                                "absolute top-2 right-2 bg-white/80 hover:bg-white text-red-500 z-10"
+                            )
+
                             ui.image(img_path).style(
                                 "width: 100%; height: 180px; object-fit: cover;"
                             )
@@ -588,17 +642,16 @@ def _inject_css() -> None:
     ui.add_head_html(_SHARED_CSS)
 
 
-def _render_search_result(data: dict) -> None:
-    """Render a successful search result inside the current UI context."""
-    # Normalised query card
+def _render_found_result(data: dict) -> None:
+    """Render a successful FOUND search result inside the current UI context."""
+    # Normalised query
     with ui.card().classes("w-full p-4 bg-gray-50 rounded-xl"):
         ui.label("Normalised Query").classes("text-sm font-medium text-gray-400 mb-1")
         ui.label(data["normalized_query"]).classes(
             "text-lg font-semibold text-gray-800"
         )
 
-    # Detection metadata
-    detection: dict = data["detection"]
+    # Score metadata chips
     with ui.row().classes("flex-wrap gap-3"):
         ui.label(f"{detection['label']}").classes("metadata-chip")
         ui.label(f"Confidence: {detection['confidence']:.0%}").classes("metadata-chip")
