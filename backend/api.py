@@ -8,6 +8,7 @@ import datetime
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -361,85 +362,48 @@ class Backend:
         # Phase 5: Verify each image candidate with Grounding DINO and score.
         scored_candidates: list[dict] = []
 
-        for image_id, (obs, semantic_score) in best_per_image.items():
-            image_record: ImageHistory | None = self._db.get_image_by_id(image_id)
-            if image_record is None:
-                logger.warning(
-                    "Object observation %d references missing image_id %d — skipping",
-                    obs.id,
-                    image_id,
-                )
-                continue
-
-            image_path: str = image_record.imgpath
-            if not Path(image_path).exists():
-                logger.warning(
-                    "Image file missing from storage: %s — skipping", image_path
-                )
-                continue
-
-            # Grounding DINO verification — 0.0 on failure (not a hard error)
-            grounding_score: float = 0.0
-            visual_score: float = 0.0
-            obs_box: list[float] | None = _parse_bounding_box(obs.bounding_box)
-
-            detect_result: Result = self._object_detector.detect(
-                image_path, normalized_query
-            )
-            if detect_result.ok:
-                grounding_score = float(detect_result.result["confidence"])
-
-                # DINOv2 visual consistency, gated by IoU: the visual score only
-                # counts when Grounding DINO's verified box overlaps the retrieved
-                # object's stored box. Without the gate, "query text appears
-                # somewhere in this image" would boost a candidate whose retrieved
-                # object is a different thing (e.g. query 'keys' retrieved the
-                # remote crop, but keys exist elsewhere in the same photo).
-                gd_box: list[float] = detect_result.result["bounding_box"]
-                if (
-                    obs_box is not None
-                    and _iou(gd_box, obs_box) >= config.VISUAL_IOU_GATE
-                ):
-                    visual_score = self._visual_consistency(
-                        image_path, gd_box, int(obs.id)
+        verification_tasks: dict = {}
+        with ThreadPoolExecutor(max_workers=config.GROUNDING_MAX_WORKERS) as executor:
+            for image_id, (obs, semantic_score) in best_per_image.items():
+                image_record: ImageHistory | None = self._db.get_image_by_id(image_id)
+                if image_record is None:
+                    logger.warning(
+                        "Object observation %d references missing image_id %d — skipping",
+                        obs.id,
+                        image_id,
                     )
-            else:
-                logger.debug(
-                    "Grounding DINO: no detection in %s: %s",
-                    Path(image_path).name,
-                    detect_result.err,
+                    continue
+
+                image_path: str = image_record.imgpath
+                if not Path(image_path).exists():
+                    logger.warning(
+                        "Image file missing from storage: %s — skipping", image_path
+                    )
+                    continue
+
+                future = executor.submit(
+                    self._verify_candidate,
+                    image_id,
+                    obs,
+                    semantic_score,
+                    image_record,
+                    normalized_query,
                 )
+                verification_tasks[future] = image_id
 
-            recency_score: float = _compute_recency_score(image_record.timestamp)
-            final_score: float = _compute_final_score(
-                semantic_score=semantic_score,
-                visual_score=visual_score,
-                grounding_score=grounding_score,
-                recency_score=recency_score,
-            )
-
-            scored_candidates.append(
-                {
-                    "image_id": image_id,
-                    "image_path": image_path,
-                    "image_timestamp": str(image_record.timestamp),
-                    "label": obs.label,
-                    "semantic_score": round(semantic_score, 4),
-                    "visual_score": round(visual_score, 4),
-                    "grounding_score": round(grounding_score, 4),
-                    "recency_score": round(recency_score, 4),
-                    "final_score": round(final_score, 4),
-                    "bounding_box": gd_box if detect_result.ok else obs_box,
-                    "detected_label": (
-                        detect_result.result["label"] if detect_result.ok else obs.label
-                    ),
-                    "detected_confidence": (
-                        grounding_score
-                        if detect_result.ok
-                        else float(obs.detector_confidence)
-                    ),
-                }
-            )
+            for future in as_completed(verification_tasks):
+                image_id = verification_tasks[future]
+                try:
+                    candidate = future.result()
+                except (OSError, RuntimeError, ValueError) as error:
+                    logger.error(
+                        "Candidate verification failed for image %d: %s",
+                        image_id,
+                        error,
+                    )
+                    continue
+                if candidate is not None:
+                    scored_candidates.append(candidate)
 
         search_duration: float = time.perf_counter() - search_start
         total_duration: float = time.perf_counter() - total_start
@@ -523,6 +487,61 @@ class Backend:
                 ),
             )
         )
+
+    def _verify_candidate(
+        self,
+        image_id: int,
+        obs: ObjectObservation,
+        semantic_score: float,
+        image_record: ImageHistory,
+        normalized_query: str,
+    ) -> dict | None:
+        """Verify and score one image candidate in a worker thread."""
+        image_path: str = image_record.imgpath
+        grounding_score: float = 0.0
+        visual_score: float = 0.0
+        obs_box: list[float] | None = _parse_bounding_box(obs.bounding_box)
+
+        detect_result: Result = self._object_detector.detect(
+            image_path, normalized_query
+        )
+        if detect_result.ok:
+            grounding_score = float(detect_result.result["confidence"])
+            gd_box: list[float] = detect_result.result["bounding_box"]
+            if obs_box is not None and _iou(gd_box, obs_box) >= config.VISUAL_IOU_GATE:
+                visual_score = self._visual_consistency(image_path, gd_box, int(obs.id))
+        else:
+            logger.debug(
+                "Grounding DINO: no detection in %s: %s",
+                Path(image_path).name,
+                detect_result.err,
+            )
+
+        recency_score: float = _compute_recency_score(image_record.timestamp)
+        final_score: float = _compute_final_score(
+            semantic_score=semantic_score,
+            visual_score=visual_score,
+            grounding_score=grounding_score,
+            recency_score=recency_score,
+        )
+        return {
+            "image_id": image_id,
+            "image_path": image_path,
+            "image_timestamp": str(image_record.timestamp),
+            "label": obs.label,
+            "semantic_score": round(semantic_score, 4),
+            "visual_score": round(visual_score, 4),
+            "grounding_score": round(grounding_score, 4),
+            "recency_score": round(recency_score, 4),
+            "final_score": round(final_score, 4),
+            "bounding_box": gd_box if detect_result.ok else obs_box,
+            "detected_label": (
+                detect_result.result["label"] if detect_result.ok else obs.label
+            ),
+            "detected_confidence": (
+                grounding_score if detect_result.ok else float(obs.detector_confidence)
+            ),
+        }
 
     def get_image_count(self) -> int:
         """Return the number of images in the database."""
