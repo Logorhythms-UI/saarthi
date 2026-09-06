@@ -18,6 +18,8 @@ import torch
 from PIL import Image
 from transformers import AutoModel, AutoProcessor
 
+from utils.embeddings import normalize_embedding
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 # Smallest SigLIP2 variant available through HuggingFace transformers.
@@ -61,7 +63,7 @@ class SemanticEmbedder:
             output = self._model.get_image_features(**inputs)
             raw: torch.Tensor = getattr(output, "pooler_output", output)
 
-        return _normalize(raw.cpu().float().numpy()[0])
+        return normalize_embedding(raw.cpu().float().numpy()[0])
 
     def embed_text(self, text: str) -> np.ndarray:
         """Produce a unit-normalized SigLIP2 text embedding.
@@ -84,19 +86,4 @@ class SemanticEmbedder:
             output = self._model.get_text_features(**inputs)
             raw: torch.Tensor = getattr(output, "pooler_output", output)
 
-        return _normalize(raw.cpu().float().numpy()[0])
-
-
-def _normalize(embedding: np.ndarray) -> np.ndarray:
-    """Return a unit-normalized (L2) copy of the embedding vector.
-
-    Returns the vector unchanged if its norm is zero to avoid
-    division by zero on degenerate model outputs.
-    """
-    norm: float = float(np.linalg.norm(embedding))
-    if norm == 0.0:
-        logger.warning(
-            "SemanticEmbedder: received zero-norm embedding — returning as-is"
-        )
-        return embedding.astype(np.float32)
-    return (embedding / norm).astype(np.float32)
+        return normalize_embedding(raw.cpu().float().numpy()[0])
