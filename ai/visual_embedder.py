@@ -16,6 +16,8 @@ import torch
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModel
 
+from utils.embeddings import normalize_embedding
+
 logger: logging.Logger = logging.getLogger(__name__)
 
 # Smallest DINOv2 variant available through HuggingFace transformers.
@@ -68,17 +70,4 @@ class VisualEmbedder:
         cls_embedding: np.ndarray = (
             outputs.last_hidden_state[:, 0, :].cpu().float().numpy()[0]
         )
-        return _normalize(cls_embedding)
-
-
-def _normalize(embedding: np.ndarray) -> np.ndarray:
-    """Return a unit-normalized (L2) copy of the embedding vector.
-
-    Returns the vector unchanged if its norm is zero to avoid
-    division by zero on degenerate model outputs.
-    """
-    norm: float = float(np.linalg.norm(embedding))
-    if norm == 0.0:
-        logger.warning("VisualEmbedder: received zero-norm embedding — returning as-is")
-        return embedding.astype(np.float32)
-    return (embedding / norm).astype(np.float32)
+        return normalize_embedding(cls_embedding)
