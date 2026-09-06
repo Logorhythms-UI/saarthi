@@ -341,6 +341,7 @@ class Backend:
             # Grounding DINO verification — 0.0 on failure (not a hard error)
             grounding_score: float = 0.0
             visual_score: float = 0.0
+            obs_box: list[float] | None = _parse_bounding_box(obs.bounding_box)
 
             detect_result: Result = self._object_detector.detect(
                 image_path, normalized_query
@@ -355,7 +356,6 @@ class Backend:
                 # object is a different thing (e.g. query 'keys' retrieved the
                 # remote crop, but keys exist elsewhere in the same photo).
                 gd_box: list[float] = detect_result.result["bounding_box"]
-                obs_box: list[float] | None = _parse_bounding_box(obs.bounding_box)
                 if (
                     obs_box is not None
                     and _iou(gd_box, obs_box) >= config.VISUAL_IOU_GATE
@@ -386,6 +386,15 @@ class Backend:
                     "visual_score": round(visual_score, 4),
                     "grounding_score": round(grounding_score, 4),
                     "final_score": round(final_score, 4),
+                    "bounding_box": gd_box if detect_result.ok else obs_box,
+                    "detected_label": (
+                        detect_result.result["label"] if detect_result.ok else obs.label
+                    ),
+                    "detected_confidence": (
+                        grounding_score
+                        if detect_result.ok
+                        else float(obs.detector_confidence)
+                    ),
                 }
             )
 
@@ -459,6 +468,16 @@ class Backend:
                 candidates=scored_candidates,
                 slm_duration_s=round(slm_duration, 2),
                 search_duration_s=round(search_duration, 2),
+                annotated_image_path=(
+                    self._object_detector.draw_bounding_box(
+                        best["image_path"],
+                        best["bounding_box"],
+                        best["detected_label"],
+                        best["detected_confidence"],
+                    )
+                    if best["bounding_box"] is not None
+                    else best["image_path"]
+                ),
             )
         )
 
@@ -757,6 +776,7 @@ def _build_found_result(
     candidates: list[dict],
     slm_duration_s: float,
     search_duration_s: float,
+    annotated_image_path: str,
 ) -> dict:
     """Build the result dict for a successful FOUND outcome."""
     return {
@@ -773,6 +793,7 @@ def _build_found_result(
         "margin": margin,
         "slm_duration_s": slm_duration_s,
         "search_duration_s": search_duration_s,
+        "annotated_image_path": annotated_image_path,
         "candidates": candidates,
     }
 
