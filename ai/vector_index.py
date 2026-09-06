@@ -17,6 +17,7 @@ Each is stored as a pair of files under ai/indexes/:
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -119,6 +120,24 @@ class VectorIndex:
 
         return results
 
+    def get_vector(self, object_id: int) -> np.ndarray | None:
+        """Return the stored vector for object_id, or None if absent.
+
+        Used at search time to compare a freshly embedded crop against the
+        vector indexed at ingestion time (DINOv2 visual consistency).
+        """
+        assert (
+            isinstance(object_id, int) and object_id > 0
+        ), "object_id must be a positive int"
+
+        try:
+            row: int = self._object_ids.index(object_id)
+        except ValueError:
+            return None
+        if row >= self._index.ntotal:
+            return None
+        return self._index.reconstruct(row).astype(np.float32)
+
     def remove_objects(self, object_ids: list[int]) -> None:
         """Remove specific object IDs from the FAISS index and the parallel mapping.
 
@@ -162,14 +181,40 @@ class VectorIndex:
         logger.info("VectorIndex '%s': completely cleared", self._name)
 
     def persist(self) -> None:
-        """Write the FAISS index and id mapping to disk.
+        """Write the FAISS index and id mapping to disk atomically.
 
-        Called once after a batch of embeddings has been added or removed, not after
-        every individual add(), to avoid redundant I/O.
+        Each file is written to a temporary sibling path and moved into place
+        with os.replace(), which is atomic on both POSIX and Windows. Without
+        this, a crash between the two writes leaves a .faiss file and an ids
+        file from different points in time — the row→object_id mapping then
+        silently returns wrong objects. The load-time validation in _load()
+        catches that case if it ever occurs anyway.
         """
-        faiss.write_index(self._index, str(self._index_path))
-        with open(self._ids_path, "w", encoding="utf-8") as f:
-            json.dump(self._object_ids, f)
+        tmp_index_path: Path = self._index_path.with_suffix(".tmp")
+        tmp_ids_path: Path = self._ids_path.with_suffix(".tmp")
+
+        try:
+            faiss.write_index(self._index, str(tmp_index_path))
+            with open(tmp_ids_path, "w", encoding="utf-8") as f:
+                json.dump(self._object_ids, f)
+            os.replace(str(tmp_index_path), str(self._index_path))
+            os.replace(str(tmp_ids_path), str(self._ids_path))
+        except (RuntimeError, OSError) as e:
+            # Best-effort cleanup; previously persisted files remain valid.
+            for tmp in (tmp_index_path, tmp_ids_path):
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except OSError as cleanup_err:
+                    logger.warning(
+                        "VectorIndex '%s': could not remove temp file %s: %s",
+                        self._name,
+                        tmp,
+                        cleanup_err,
+                    )
+            logger.error("VectorIndex '%s': persist failed: %s", self._name, e)
+            raise
+
         logger.info(
             "VectorIndex '%s': persisted %d vectors to %s",
             self._name,
@@ -187,13 +232,53 @@ class VectorIndex:
     # ------------------------------------------------------------------
 
     def _load(self) -> faiss.IndexFlatIP:
-        """Load existing index files from disk, or create a fresh empty index."""
+        """Load existing index files from disk, or create a fresh empty index.
+
+        A persisted pair that disagrees with itself (dimension mismatch,
+        row-count mismatch, corrupted files) is discarded and an empty index
+        is returned: the ids file is the only way to translate FAISS rows
+        back to object ids, so a desynchronised pair would silently return
+        wrong objects. Starting empty is safe because the database remains
+        the source of truth and re-ingestion rebuilds the index.
+        """
         if self._index_path.exists() and self._ids_path.exists():
             start: float = time.perf_counter()
-            index: faiss.IndexFlatIP = faiss.read_index(str(self._index_path))
-            with open(self._ids_path, "r", encoding="utf-8") as f:
-                self._object_ids = json.load(f)
+            try:
+                index: faiss.IndexFlatIP = faiss.read_index(str(self._index_path))
+                with open(self._ids_path, "r", encoding="utf-8") as f:
+                    self._object_ids = json.load(f)
+            except (RuntimeError, OSError, json.JSONDecodeError) as e:
+                logger.error(
+                    "VectorIndex '%s': failed to load persisted index (%s) — "
+                    "starting empty; re-ingest images to rebuild",
+                    self._name,
+                    e,
+                )
+                self._object_ids = []
+                return faiss.IndexFlatIP(self._dimension)
             duration: float = time.perf_counter() - start
+
+            ids_valid: bool = all(
+                isinstance(i, int) and i > 0 for i in self._object_ids
+            )
+            if (
+                index.d != self._dimension
+                or index.ntotal != len(self._object_ids)
+                or not ids_valid
+            ):
+                logger.error(
+                    "VectorIndex '%s': persisted index inconsistent "
+                    "(dim=%d expected=%d, ntotal=%d, ids=%d) — starting empty; "
+                    "re-ingest images to rebuild",
+                    self._name,
+                    index.d,
+                    self._dimension,
+                    index.ntotal,
+                    len(self._object_ids),
+                )
+                self._object_ids = []
+                return faiss.IndexFlatIP(self._dimension)
+
             logger.info(
                 "VectorIndex '%s': loaded %d vectors from disk in %.2fs",
                 self._name,

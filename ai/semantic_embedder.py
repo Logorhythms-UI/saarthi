@@ -77,7 +77,7 @@ class SemanticEmbedder:
 
         # padding="max_length" is required by the SigLIP tokenizer
         inputs = self._processor(
-            text=text, return_tensors="pt", padding="max_length"
+            text=text, return_tensors="pt", padding="max_length", truncation=True
         ).to(self._device)
 
         with torch.no_grad():
