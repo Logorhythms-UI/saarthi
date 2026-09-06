@@ -4,8 +4,9 @@ Provides zero-shot object detection on images using the
 IDEA-Research/grounding-dino-tiny model from Hugging Face.
 """
 
+import base64
+import io
 import logging
-import tempfile
 import time
 from pathlib import Path
 
@@ -137,8 +138,7 @@ class ObjectDetector:
     ) -> str:
         """Draw a bounding box on a copy of the image.
 
-        Saves the annotated image to a temporary file to preserve
-        the original.  Returns the absolute path of the temp file.
+        Returns an in-memory data URL so no temporary file is created.
         """
         assert isinstance(image_path, str), "image_path must be a string"
         assert Path(image_path).exists(), f"Image {image_path} does not exist"
@@ -172,16 +172,10 @@ class ObjectDetector:
         )
         draw.text((x1, y1), text, fill="white", font=font)
 
-        # Save to temporary file — original image stays untouched
-        suffix: str = Path(image_path).suffix or ".jpg"
-        with tempfile.NamedTemporaryFile(
-            delete=False, suffix=suffix, prefix="saarthi_annotated_"
-        ) as tmp:
-            image.save(tmp.name)
-            annotated_path: str = tmp.name
-
-        logger.info("Annotated image saved to %s", annotated_path)
-        return annotated_path
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG")
+        encoded_image = base64.b64encode(buffer.getvalue()).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded_image}"
 
 
 def _validate_bounding_box(
