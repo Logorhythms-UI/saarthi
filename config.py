@@ -9,6 +9,7 @@ retrieval behaviour without hunting through individual modules.
 # Number of top object observations retrieved from the semantic index per query.
 # Higher values increase recall at the cost of more expensive verification.
 SEMANTIC_TOP_K: int = 20
+GROUNDING_MAX_WORKERS: int = 4
 
 # --- Candidate scoring weights ---
 # Initial heuristic values only — calibrate with an evaluation dataset.
