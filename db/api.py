@@ -141,6 +141,19 @@ class DatabaseEngine:
         count: int = ImageHistory.select().count()
         return count
 
+    def get_distinct_object_labels(self) -> list[str]:
+        """Return the distinct broad-detector labels present in the database.
+
+        Diagnostic for ingestion recall: if a user's target object never
+        appears in this list, it can never be retrieved.
+        """
+        rows = ObjectObservation.select(ObjectObservation.label).distinct()
+        return [row.label for row in rows]
+
+    def get_object_observation_count(self) -> int:
+        """Return the total number of ObjectObservation records."""
+        return int(ObjectObservation.select().count())
+
     def _next_sequence_number(self) -> int:
         """Compute the next monotonically increasing sequence number."""
         max_seq = ImageHistory.select(fn.MAX(ImageHistory.sequence_number)).scalar()
