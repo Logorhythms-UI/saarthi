@@ -99,3 +99,29 @@ class StorageEngine:
         full_path: Path = self._upload_path / filename
         assert full_path.exists(), f"Image {filename} not found in uploads"
         return str(full_path)
+
+    def delete_file(self, path: str) -> bool:
+        """Delete a stored file if it exists. Returns True if deleted.
+
+        Raises ValueError if the path resolves outside the uploads
+        directory (defence against deleting arbitrary files via a
+        corrupted database path).
+        """
+        assert isinstance(path, str), "path must be a string"
+
+        target: Path = Path(path).resolve()
+        if not target.is_relative_to(self._upload_path.resolve()):
+            raise ValueError(f"Refusing to delete path outside uploads: {path}")
+        if not target.exists():
+            return False
+
+        target.unlink()
+        logger.info("Deleted stored file: %s", target.name)
+        return True
+
+    def clear_uploads(self) -> None:
+        """Remove every file from the uploads directory."""
+        for f in self._upload_path.glob("*"):
+            if f.is_file():
+                f.unlink()
+        logger.info("Cleared all files from uploads directory")
