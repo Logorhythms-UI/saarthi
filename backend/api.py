@@ -291,10 +291,14 @@ class Backend:
         slm_duration: float = time.perf_counter() - total_start
 
         if not normalize_result.ok:
-            logger.error("Query normalisation failed: %s", normalize_result.err)
-            return Result(err=f"Query processing failed: {normalize_result.err}")
+            normalized_query = query.strip()
+            logger.warning(
+                "Query normalisation failed: %s; using raw query for retrieval",
+                normalize_result.err,
+            )
+        else:
+            normalized_query = normalize_result.result
 
-        normalized_query: str = normalize_result.result
         logger.info(
             "SLM normalisation completed in %.2fs: '%s' → '%s'",
             slm_duration,
@@ -782,10 +786,11 @@ class Backend:
         return float(np.dot(current, stored))
 
     def _check_index_consistency(self) -> None:
-        """Warn when DB observation count and index sizes disagree.
+        """Rebuild indexes from DB observations when their counts disagree.
 
-        The database is the source of truth; a smaller index means some
-        objects are silently un-retrievable until re-ingestion.
+        The database is the source of truth. Object embeddings are recreated
+        from the stored image crops because SQLite stores metadata and boxes,
+        not the embedding vectors themselves.
         """
         db_count: int = self._db.get_object_observation_count()
         semantic_count: int = self._semantic_index.size
@@ -793,12 +798,56 @@ class Backend:
         if db_count != semantic_count or db_count != visual_count:
             logger.warning(
                 "Index inconsistency: DB has %d observations, semantic index "
-                "has %d, visual index has %d. Affected objects cannot be "
-                "retrieved; re-ingest images to rebuild.",
+                "has %d, visual index has %d. Rebuilding from DB.",
                 db_count,
                 semantic_count,
                 visual_count,
             )
+            self._rebuild_indexes_from_db()
+
+    def _rebuild_indexes_from_db(self) -> None:
+        """Recreate semantic and visual indexes from stored observations."""
+        observations = self._db.get_object_observations_by_ids(
+            [int(row.id) for row in ObjectObservation.select(ObjectObservation.id)]
+        )
+        self._semantic_index.clear()
+        self._visual_index.clear()
+        rebuilt: int = 0
+
+        for observation in observations:
+            image_record = self._db.get_image_by_id(int(observation.image_id))
+            box = _parse_bounding_box(observation.bounding_box)
+            if (
+                image_record is None
+                or box is None
+                or not Path(image_record.imgpath).exists()
+            ):
+                logger.warning(
+                    "Skipping observation %d during index rebuild: image or box missing",
+                    observation.id,
+                )
+                continue
+
+            try:
+                with Image.open(image_record.imgpath) as image:
+                    crop = image.convert("RGB").crop(tuple(box))
+                semantic_embedding = self._semantic_embedder.embed_image(crop)
+                visual_embedding = self._visual_embedder.embed(crop)
+                self._semantic_index.add(semantic_embedding, int(observation.id))
+                self._visual_index.add(visual_embedding, int(observation.id))
+                rebuilt += 1
+            except (OSError, UnidentifiedImageError, RuntimeError, ValueError) as error:
+                logger.error(
+                    "Failed to rebuild observation %d: %s", observation.id, error
+                )
+
+        self._semantic_index.persist()
+        self._visual_index.persist()
+        logger.info(
+            "Index rebuild complete: %d/%d observations restored",
+            rebuilt,
+            len(observations),
+        )
 
 
 # ------------------------------------------------------------------
