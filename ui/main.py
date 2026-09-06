@@ -197,7 +197,7 @@ class Frontend:
         """Register unauthenticated mobile image and ZIP upload endpoints."""
         engine: Frontend = self
 
-        @app.post("/api/v1/images", status_code=201)
+        @app.post("/api/v1/images", status_code=201, response_model=None)
         async def _upload_image(
             file: Annotated[UploadFile, File(...)],
         ) -> dict | JSONResponse:
@@ -219,7 +219,7 @@ class Frontend:
 
             return {"uploaded": [file.filename], "failed": []}
 
-        @app.post("/api/v1/images/zip", status_code=201)
+        @app.post("/api/v1/images/zip", status_code=201, response_model=None)
         async def _upload_zip(
             file: Annotated[UploadFile, File(...)],
         ) -> dict | JSONResponse:
@@ -656,9 +656,7 @@ def _render_found_result(data: dict) -> None:
         ui.label(f"Score: {data['final_score']:.2f}").classes("metadata-chip")
         ui.label(f"Grounding: {data['grounding_score']:.0%}").classes("metadata-chip")
         ui.label(f"Captured: {data['image_timestamp']}").classes("metadata-chip")
-        ui.label(
-            f"Searched {data['images_searched']} of " f"{data['total_images']} images"
-        ).classes("metadata-chip")
+        ui.label(f"Candidates: {data['candidate_count']}").classes("metadata-chip")
         ui.label(
             f"SLM: {data['slm_duration_s']}s | "
             f"Detection: {data['search_duration_s']}s"
