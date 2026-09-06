@@ -29,3 +29,23 @@ MATCH_THRESHOLD: float = 0.45
 # Set to 0.0 to disable the margin check (current default).
 # Enabling this rejects near-tie results that are inherently ambiguous.
 MIN_MARGIN: float = 0.0
+
+
+# --- Score calibration (raw signal → [0, 1]) ---
+# These map each raw signal onto a common [0, 1] scale before the weighted
+# sum, because the three signals have incompatible raw distributions:
+#   SigLIP2 cosine:      true match ≈ 0.10–0.28, unrelated ≈ 0.00–0.10
+#   DINOv2 cosine:       same object ≈ 0.70–0.90, different ≈ 0.40–0.60
+#   GD confidence:       true detection ≈ 0.35–0.90, none = 0.0
+# PLACEHOLDER values — replace with numbers measured from the debug
+# 'candidates' list in search results (see verification steps at the end).
+SEMANTIC_FLOOR: float = 0.03
+SEMANTIC_CEILING: float = 0.27
+VISUAL_FLOOR: float = 0.45
+VISUAL_CEILING: float = 0.80
+GROUNDING_FLOOR: float = 0.25
+GROUNDING_CEILING: float = 0.85
+
+# Minimum IoU between Grounding DINO's verified box and the retrieved
+# object's stored box required for the visual score to be counted.
+VISUAL_IOU_GATE: float = 0.2
