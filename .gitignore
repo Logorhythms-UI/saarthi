@@ -19,3 +19,8 @@ ai/indexes/
 *.db-shm
 *.db-wal
 *.pt
+
+# AI assistant files
+CLAUDE.md
+.claude/
+docs/ai/
