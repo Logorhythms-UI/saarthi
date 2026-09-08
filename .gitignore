@@ -24,3 +24,5 @@ ai/indexes/
 CLAUDE.md
 .claude/
 docs/ai/
+
+db/data/

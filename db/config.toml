@@ -1,0 +1,6 @@
+# Settings for the db component.
+# All paths are relative to the db/ folder. Absolute paths and ".." are not allowed.
+
+[paths]
+sqlite = "data/saarthi.db"
+faiss_index = "data/regions.faiss"
