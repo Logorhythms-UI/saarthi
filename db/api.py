@@ -12,7 +12,14 @@ from pathlib import Path, PurePosixPath
 
 from peewee import IntegrityError, PeeweeException, SqliteDatabase
 
-from db.schema import Image, ImageStatus, Region, database_proxy, utc_now
+from db.schema import (
+    Image,
+    ImageStatus,
+    Region,
+    RegionSource,
+    database_proxy,
+    utc_now,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -39,6 +46,30 @@ _SQLITE_PRAGMAS: dict[str, object] = {
 
 class ConfigError(Exception):
     """Raised when `config.toml` is missing or has a wrong value."""
+
+
+@dataclass(frozen=True)
+class NewRegion:
+    """Data for one region to insert. Coordinates are pixels in the image frame."""
+
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+    det_score: float
+    source: RegionSource
+    phrases: list[str]
+    in_hand: bool = False
+    quality_ok: bool = True
+
+    def __post_init__(self) -> None:
+        assert all(isinstance(v, int) for v in (self.x0, self.y0, self.x1, self.y1))
+        assert 0 <= self.x0 < self.x1, "x1 must be more than x0, and x0 at least 0"
+        assert 0 <= self.y0 < self.y1, "y1 must be more than y0, and y0 at least 0"
+        assert isinstance(self.det_score, float), "det_score must be a float"
+        assert isinstance(self.source, RegionSource), "source must be a RegionSource"
+        assert isinstance(self.phrases, list)
+        assert all(isinstance(phrase, str) for phrase in self.phrases)
 
 
 class DbError(Exception):
@@ -270,3 +301,118 @@ def mark_image_failed(image_id: int, error: str) -> Image:
     """Set a `processing` image to `failed`. `error` must not hold personal data."""
     assert isinstance(error, str) and error, "error must be a non-empty string"
     return _finish_image(image_id, ImageStatus.FAILED, error)
+
+
+def _require_processing(image_id: int) -> None:
+    """Raise `InvalidStateError` unless the image exists and is `processing`."""
+    is_processing: bool = (
+        Image.select()
+        .where(
+            Image.id == image_id,
+            Image.status == ImageStatus.PROCESSING.value,
+        )
+        .exists()
+    )
+    if not is_processing:
+        raise InvalidStateError(
+            f"Image {image_id} does not exist or is not in status processing"
+        )
+
+
+def set_image_analysis(image_id: int, phash: str, blur_score: float) -> Image:
+    """Save the quality-gate values of a `processing` image."""
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    assert isinstance(phash, str) and 0 < len(phash) <= 16, "phash: 1 to 16 chars"
+    assert isinstance(blur_score, float) and blur_score >= 0, "blur_score must be >= 0"
+
+    with _translate_errors("set_image_analysis"):
+        changed: int = (
+            Image.update(phash=phash, blur_score=blur_score)
+            .where(
+                Image.id == image_id,
+                Image.status == ImageStatus.PROCESSING.value,
+            )
+            .execute()
+        )
+        if changed != 1:
+            raise InvalidStateError(
+                f"Image {image_id} does not exist or is not in status processing"
+            )
+        return Image.get_by_id(image_id)
+
+
+def add_regions(image_id: int, regions: list[NewRegion]) -> list[Region]:
+    """Insert the regions of a `processing` image in one transaction.
+
+    Return the new rows, with ids set and `embedding_model` empty. The ids are
+    the vector ids for the FAISS index. An empty list is allowed.
+    """
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    assert isinstance(regions, list), "regions must be a list"
+    assert all(isinstance(region, NewRegion) for region in regions)
+
+    with _translate_errors("add_regions"), database_proxy.atomic():
+        _require_processing(image_id)
+        rows: list[Region] = [
+            Region.create(
+                image=image_id,
+                x0=region.x0,
+                y0=region.y0,
+                x1=region.x1,
+                y1=region.y1,
+                det_score=region.det_score,
+                source=region.source.value,
+                phrases=region.phrases,
+                in_hand=region.in_hand,
+                quality_ok=region.quality_ok,
+            )
+            for region in regions
+        ]
+    logger.debug("Added %d region(s) to image %d", len(rows), image_id)
+    return rows
+
+
+def get_regions(image_id: int) -> list[Region]:
+    """Return the regions of an image, ordered by id."""
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    with _translate_errors("get_regions"):
+        return list(Region.select().where(Region.image == image_id).order_by(Region.id))
+
+
+def mark_regions_embedded(region_ids: list[int], embedding_model: str) -> int:
+    """Record that the vectors of these regions are in the FAISS index.
+
+    Call it after the vectors are written. Change all rows or none: if one id
+    does not exist, raise `InvalidStateError` and change nothing.
+    """
+    assert isinstance(region_ids, list) and region_ids, "region_ids must not be empty"
+    assert all(isinstance(i, int) and i > 0 for i in region_ids), "ids must be positive"
+    assert isinstance(embedding_model, str) and embedding_model, "model name needed"
+
+    unique_ids: set[int] = set(region_ids)
+    with _translate_errors("mark_regions_embedded"), database_proxy.atomic():
+        changed: int = (
+            Region.update(embedding_model=embedding_model)
+            .where(Region.id.in_(unique_ids))
+            .execute()
+        )
+        if changed != len(unique_ids):
+            raise InvalidStateError(
+                f"{len(unique_ids) - changed} region id(s) do not exist"
+            )
+    logger.debug("Marked %d region(s) as embedded", changed)
+    return changed
+
+
+def list_embedded_region_ids() -> list[int]:
+    """Return the ids of all regions that have a vector in the FAISS index.
+
+    The backend compares this list with the ids in FAISS to find differences.
+    """
+    with _translate_errors("list_embedded_region_ids"):
+        query = (
+            Region.select(Region.id)
+            .where(Region.embedding_model.is_null(False))
+            .order_by(Region.id)
+        )
+        return [row.id for row in query]

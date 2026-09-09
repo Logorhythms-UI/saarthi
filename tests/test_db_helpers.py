@@ -11,16 +11,22 @@ import pytest
 from db.api import (
     DuplicateImageError,
     InvalidStateError,
+    NewRegion,
     add_image,
+    add_regions,
     claim_next_pending,
     find_image_by_sha256,
     get_image,
+    get_regions,
     init_db,
+    list_embedded_region_ids,
     mark_image_done,
     mark_image_failed,
     mark_image_rejected,
+    mark_regions_embedded,
+    set_image_analysis,
 )
-from db.schema import Image, ImageStatus
+from db.schema import Image, ImageStatus, Region, RegionSource
 
 TEST_PREFIX: str = "__test__/"
 
@@ -153,3 +159,84 @@ def test_status_detail_is_cut() -> None:
     set_status(image, ImageStatus.PROCESSING)
     finished: Image = mark_image_failed(image.id, "x" * 5000)
     assert len(finished.status_detail) == 500
+
+
+def new_region(**overrides: object) -> NewRegion:
+    fields: dict[str, object] = {
+        "x0": 10,
+        "y0": 20,
+        "x1": 110,
+        "y1": 120,
+        "det_score": 0.31,
+        "source": RegionSource.FULL,
+        "phrases": ["a bottle"],
+    }
+    fields.update(overrides)
+    return NewRegion(**fields)
+
+
+def processing_image() -> Image:
+    image: Image = new_image()
+    set_status(image, ImageStatus.PROCESSING)
+    return image
+
+
+def test_set_image_analysis() -> None:
+    image: Image = processing_image()
+    updated: Image = set_image_analysis(image.id, "ab12cd34ef56ab12", 153.5)
+    assert updated.phash == "ab12cd34ef56ab12"
+    assert updated.blur_score == 153.5
+
+
+def test_set_image_analysis_needs_processing() -> None:
+    with pytest.raises(InvalidStateError):
+        set_image_analysis(new_image().id, "ab12", 1.0)
+
+
+def test_add_and_get_regions() -> None:
+    image: Image = processing_image()
+    rows: list[Region] = add_regions(
+        image.id, [new_region(), new_region(x0=0, phrases=["a cup"], in_hand=True)]
+    )
+    assert len(rows) == 2 and rows[0].id < rows[1].id
+    assert all(row.embedding_model is None for row in rows)
+    loaded: list[Region] = get_regions(image.id)
+    assert [r.id for r in loaded] == [r.id for r in rows]
+    assert loaded[1].phrases == ["a cup"] and loaded[1].in_hand is True
+
+
+def test_add_regions_empty_list_is_allowed() -> None:
+    image: Image = processing_image()
+    assert add_regions(image.id, []) == []
+    assert get_regions(image.id) == []
+
+
+def test_add_regions_needs_processing() -> None:
+    with pytest.raises(InvalidStateError):
+        add_regions(new_image().id, [new_region()])
+    with pytest.raises(InvalidStateError):
+        add_regions(2**31, [new_region()])
+
+
+@pytest.mark.parametrize("overrides", [{"x1": 5}, {"y0": -1}, {"det_score": 1}])
+def test_new_region_rejects_bad_values(overrides: dict[str, object]) -> None:
+    with pytest.raises(AssertionError):
+        new_region(**overrides)
+
+
+def test_mark_regions_embedded_and_list() -> None:
+    image: Image = processing_image()
+    rows: list[Region] = add_regions(image.id, [new_region(), new_region(x0=1)])
+    before: set[int] = set(list_embedded_region_ids())
+    assert mark_regions_embedded([rows[0].id], "dinov2-base") == 1
+    after: set[int] = set(list_embedded_region_ids())
+    assert after - before == {rows[0].id}
+    assert get_regions(image.id)[1].embedding_model is None
+
+
+def test_mark_regions_embedded_changes_nothing_on_missing_id() -> None:
+    image: Image = processing_image()
+    rows: list[Region] = add_regions(image.id, [new_region()])
+    with pytest.raises(InvalidStateError):
+        mark_regions_embedded([rows[0].id, 2**31], "dinov2-base")
+    assert get_regions(image.id)[0].embedding_model is None
