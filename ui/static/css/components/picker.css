@@ -1,17 +1,14 @@
 /* upload_picker: drop area and the buttons that open the file chooser. */
 
-.up-picker {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-}
-
 .up-picker__zone {
   box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
   border: 2px dashed var(--color-border-strong);
   border-radius: var(--radius-l);
-  padding: var(--space-5);
-  text-align: center;
   transition: border-color var(--motion-fast) ease,
     background-color var(--motion-fast) ease;
 }
@@ -41,14 +38,29 @@
   margin-top: var(--space-4);
 }
 
-/* The camera button shows on touch devices only. */
-.up-picker__camera {
+/* The camera uploader holds one button. It shows on touch devices only. */
+.up-picker__camera.q-uploader {
+  display: none;
+  width: auto;
+  max-width: none;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+}
+
+.up-picker__camera .q-uploader__header {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.up-picker__camera .q-uploader__list {
   display: none;
 }
 
 @media (hover: none) and (pointer: coarse) {
-  .up-picker__camera {
-    display: inline-flex;
+  .up-picker__camera.q-uploader {
+    display: flex;
   }
 
   /* Drag and drop does not exist on touch devices. */
@@ -64,8 +76,28 @@
   }
 }
 
-/* Hide the default list and header of the Quasar uploader. */
-.up-picker .q-uploader__header,
-.up-picker .q-uploader__list {
+/* The zone is a Quasar uploader. Only our own header content is visible. */
+.up-picker__zone .q-uploader__header {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.up-picker__zone .q-uploader__list {
   display: none;
+}
+
+.up-picker__content {
+  width: 100%;
+  padding: var(--space-5);
+  text-align: center;
+}
+
+/* Phones: both buttons use the full width. */
+@media (max-width: 39.99rem) {
+  .up-picker__actions .q-btn,
+  .up-picker__camera.q-uploader,
+  .up-picker__camera .q-uploader__header {
+    width: 100%;
+  }
 }
