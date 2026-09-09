@@ -12,6 +12,7 @@ from db.api import (
     DuplicateImageError,
     InvalidStateError,
     NewRegion,
+    RecoveryReport,
     add_image,
     add_regions,
     claim_next_pending,
@@ -24,9 +25,10 @@ from db.api import (
     mark_image_failed,
     mark_image_rejected,
     mark_regions_embedded,
+    recover_interrupted,
     set_image_analysis,
 )
-from db.schema import Image, ImageStatus, Region, RegionSource
+from db.schema import Image, ImageStatus, Region, RegionSource, utc_now
 
 TEST_PREFIX: str = "__test__/"
 
@@ -240,3 +242,42 @@ def test_mark_regions_embedded_changes_nothing_on_missing_id() -> None:
     with pytest.raises(InvalidStateError):
         mark_regions_embedded([rows[0].id, 2**31], "dinov2-base")
     assert get_regions(image.id)[0].embedding_model is None
+
+
+def test_recover_interrupted_resets_image_and_reports_stale_vectors() -> None:
+    skip_if_real_rows(ImageStatus.PROCESSING)
+    image: Image = processing_image()
+    set_image_analysis(image.id, "ab12", 1.0)
+    rows: list[Region] = add_regions(image.id, [new_region(), new_region(x0=1)])
+    mark_regions_embedded([rows[0].id], "dinov2-base")
+    Image.update(status_detail="old", processed_at=utc_now()).where(
+        Image.id == image.id
+    ).execute()
+
+    report: RecoveryReport = recover_interrupted()
+
+    assert report.reset_image_ids == [image.id]
+    assert report.stale_vector_ids == [rows[0].id]
+    recovered: Image | None = get_image(image.id)
+    assert recovered.status == ImageStatus.PENDING.value
+    assert recovered.status_detail is None and recovered.processed_at is None
+    assert get_regions(image.id) == []
+    # A second call has nothing left to reset.
+    second: RecoveryReport = recover_interrupted()
+    assert second.reset_image_ids == [] and second.stale_vector_ids == []
+
+
+def test_recover_interrupted_reports_done_regions_without_vector() -> None:
+    skip_if_real_rows(ImageStatus.PROCESSING)
+    image: Image = processing_image()
+    rows: list[Region] = add_regions(image.id, [new_region(), new_region(x0=1)])
+    mark_regions_embedded([rows[0].id], "dinov2-base")
+    mark_image_done(image.id)
+
+    report: RecoveryReport = recover_interrupted()
+
+    assert rows[1].id in report.unembedded_region_ids
+    assert rows[0].id not in report.unembedded_region_ids
+    assert report.reset_image_ids == []
+    assert get_image(image.id).status == ImageStatus.DONE.value
+    assert len(get_regions(image.id)) == 2
