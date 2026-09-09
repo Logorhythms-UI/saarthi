@@ -72,6 +72,18 @@ class NewRegion:
         assert all(isinstance(phrase, str) for phrase in self.phrases)
 
 
+@dataclass(frozen=True)
+class RecoveryReport:
+    """Result of `recover_interrupted`. The backend acts on the FAISS index."""
+
+    # Images that were `processing` and are `pending` again.
+    reset_image_ids: list[int]
+    # Deleted regions that had a vector. The backend must remove these ids from FAISS.
+    stale_vector_ids: list[int]
+    # Regions of `done` images with no vector. The backend must decide what to do.
+    unembedded_region_ids: list[int]
+
+
 class DbError(Exception):
     """Base class of the errors that the query helpers raise."""
 
@@ -416,3 +428,66 @@ def list_embedded_region_ids() -> list[int]:
             .order_by(Region.id)
         )
         return [row.id for row in query]
+
+
+def recover_interrupted() -> RecoveryReport:
+    """Repair the database after a stop. Call it once at start-up.
+
+    Run it after `init_db` and before the workers start. It changes the
+    database only. The backend removes `stale_vector_ids` from the FAISS index.
+
+    1. Each `processing` image goes back to `pending`.
+    2. The regions of these images are deleted, so the retry cannot make
+       duplicates. The ids of those that had a vector are reported.
+    3. Regions of `done` images with no vector are reported and not changed.
+    """
+    with _translate_errors("recover_interrupted"), database_proxy.atomic("IMMEDIATE"):
+        interrupted: list[int] = [
+            row.id
+            for row in Image.select(Image.id)
+            .where(Image.status == ImageStatus.PROCESSING.value)
+            .order_by(Image.id)
+        ]
+        stale_vector_ids: list[int] = []
+        if interrupted:
+            stale_vector_ids = [
+                row.id
+                for row in Region.select(Region.id)
+                .where(
+                    Region.image.in_(interrupted),
+                    Region.embedding_model.is_null(False),
+                )
+                .order_by(Region.id)
+            ]
+            Region.delete().where(Region.image.in_(interrupted)).execute()
+            Image.update(
+                status=ImageStatus.PENDING.value,
+                status_detail=None,
+                processed_at=None,
+            ).where(Image.id.in_(interrupted)).execute()
+        unembedded: list[int] = [
+            row.id
+            for row in Region.select(Region.id)
+            .join(Image)
+            .where(
+                Image.status == ImageStatus.DONE.value,
+                Region.embedding_model.is_null(),
+            )
+            .order_by(Region.id)
+        ]
+
+    report: RecoveryReport = RecoveryReport(interrupted, stale_vector_ids, unembedded)
+    logger.info(
+        "Recovery: %d image(s) reset, %d stale vector id(s), %d region(s) without vector",
+        len(interrupted),
+        len(stale_vector_ids),
+        len(unembedded),
+    )
+    if stale_vector_ids or unembedded:
+        logger.warning(
+            "Recovery needs action by backend: remove %d id(s) from FAISS, "
+            "check %d region(s) without vector",
+            len(stale_vector_ids),
+            len(unembedded),
+        )
+    return report
