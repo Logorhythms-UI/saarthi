@@ -75,15 +75,91 @@ One row for each detected box in an image.
 
 ## Processing flow
 
-1. The server saves the file and inserts an `image` row with the status `pending`.
-2. A worker sets the status to `processing`.
-3. The worker inserts the `region` rows. This gives the region ids.
-4. The worker adds the vectors to the FAISS index, with the region ids as vector ids.
-5. The worker sets `embedding_model` on each region.
-6. The worker sets the image status to `done`.
+The `backend` module controls this flow. The db module gives the helper for each step.
 
-If the server stops during step 4, some regions keep a null `embedding_model`.
-A recovery job can find these regions and make their vectors again.
+| Step | Action | Helper |
+|------|--------|--------|
+| 1 | Check for a duplicate upload | `find_image_by_sha256` |
+| 2 | Save the file, then insert the image with the status `pending` | `add_image` |
+| 3 | A worker takes the oldest `pending` image. The status becomes `processing` | `claim_next_pending` |
+| 4 | The worker saves the quality-gate values | `set_image_analysis` |
+| 5 | The worker inserts the regions. This gives the region ids | `add_regions` |
+| 6 | The worker adds the vectors to the FAISS index, with the region ids as vector ids | (FAISS, not in the db module) |
+| 7 | The worker sets `embedding_model` on each region | `mark_regions_embedded` |
+| 8 | The worker sets the final status | `mark_image_done`, `mark_image_rejected` or `mark_image_failed` |
+
+If the server stops during step 6, some regions keep a null `embedding_model`.
+The start-up recovery finds them (see below).
+
+## Query helpers
+
+All helpers are in `db/api.py`. They return `Image` and `Region` objects.
+Each helper checks its parameters with `assert`.
+Each helper uses peewee expressions only. No helper builds SQL from text.
+
+| Helper | Task | Result |
+|--------|------|--------|
+| `add_image(file_path, sha256, width, height, room=None)` | Insert an image with the status `pending`. `captured_at` is the time of the call. The path must be relative and must not contain `..` | `Image`. Raises `DuplicateImageError` |
+| `find_image_by_sha256(sha256)` | Find an image by hash | `Image` or `None` |
+| `get_image(image_id)` | Read one image | `Image` or `None` |
+| `claim_next_pending()` | In one write transaction, set the oldest `pending` image to `processing`. Two workers cannot get the same image | `Image` or `None` |
+| `set_image_analysis(image_id, phash, blur_score)` | Save the quality-gate values | `Image` |
+| `add_regions(image_id, regions)` | Insert all regions in one transaction. An empty list is allowed | List of `Region` |
+| `get_regions(image_id)` | Read the regions, ordered by id | List of `Region` |
+| `mark_regions_embedded(region_ids, embedding_model)` | Record that the vectors are in FAISS. The helper changes all rows or none | Number of rows changed |
+| `mark_image_done(image_id)` | Set the status `done` | `Image` |
+| `mark_image_rejected(image_id, reason)` | Set the status `rejected` | `Image` |
+| `mark_image_failed(image_id, error)` | Set the status `failed` | `Image` |
+| `list_embedded_region_ids()` | List the ids of the regions that have a vector | List of integers |
+| `recover_interrupted()` | Repair the database after a stop | `RecoveryReport` |
+
+`add_regions` takes `NewRegion` objects. A `NewRegion` checks its own box:
+`x0` must be 0 or more and less than `x1`, and `y0` must be 0 or more and less than `y1`.
+
+These helpers work only on an image with the status `processing`:
+`set_image_analysis`, `add_regions`, `mark_image_done`, `mark_image_rejected` and `mark_image_failed`.
+Each of them changes the row with one `UPDATE` that tests the status.
+If the status is not `processing`, the helper raises `InvalidStateError`.
+
+The helpers `mark_image_rejected` and `mark_image_failed` keep the text in `status_detail`.
+The helper cuts the text to 500 characters.
+Do not put image content or personal data in this text.
+
+### Errors
+
+| Error | Meaning |
+|-------|---------|
+| `ConfigError` | `config.toml` is missing or not correct |
+| `DbError` | Base class of the errors below. The helpers also raise it for other database errors |
+| `DuplicateImageError` | `file_path` or `sha256` is already in the database |
+| `InvalidStateError` | The image does not exist or has the wrong status. Also used when a region id does not exist |
+| `InvalidRecordError` | The database refuses a value |
+
+## Start-up recovery
+
+The `backend` module calls `recover_interrupted()` one time at start.
+It must call it after `init_db()` and before it starts the workers.
+The helper changes the database only. It does not open the FAISS index.
+
+The helper does these steps in one write transaction:
+
+1. It finds the images with the status `processing`. A stop happened while a worker held them.
+2. It collects the ids of their regions that have a vector.
+3. It deletes all regions of these images. The retry makes new regions, so duplicates cannot occur.
+4. It sets these images to `pending` and clears `status_detail` and `processed_at`.
+5. It finds the regions of `done` images that have no vector. It does not change them.
+
+The helper returns a `RecoveryReport`:
+
+| Field | Meaning | Action for the backend |
+|-------|---------|------------------------|
+| `reset_image_ids` | Images that are `pending` again | None. The workers pick them up |
+| `stale_vector_ids` | Deleted regions that had a vector | Remove these ids from the FAISS index |
+| `unembedded_region_ids` | Regions of `done` images with no vector | Decide: make the vectors again, or log and ignore |
+
+The db module cannot see the FAISS index.
+The backend must also find the opposite error: a vector in FAISS with no region row.
+Use `list_embedded_region_ids()` and compare the result with the ids in the FAISS index.
 
 ## Configuration
 
@@ -114,7 +190,11 @@ The module logs in this format: `{module}-{time}: {message}`.
 
 | Level | Event |
 |-------|-------|
-| INFO | The config is loaded, the database is open, the tables are ready |
-| ERROR | The config is not valid, or the database cannot open |
+| DEBUG | An image or a group of regions is added, regions are marked as embedded |
+| INFO | The config is loaded, the database is open, the tables are ready, an image is claimed, an image gets a final status, the recovery summary |
+| WARNING | The recovery found work for the backend (stale vectors or regions without a vector) |
+| ERROR | The config is not valid, the database cannot open, or a database call fails |
+
+The default log level is INFO. DEBUG lines are not shown.
 
 The logs do not contain image content or personal data.
