@@ -1,0 +1,71 @@
+/* upload_picker: drop area and the buttons that open the file chooser. */
+
+.up-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.up-picker__zone {
+  box-sizing: border-box;
+  border: 2px dashed var(--color-border-strong);
+  border-radius: var(--radius-l);
+  padding: var(--space-5);
+  text-align: center;
+  transition: border-color var(--motion-fast) ease,
+    background-color var(--motion-fast) ease;
+}
+
+.up-picker__zone--active,
+.up-picker__zone:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.up-picker__title {
+  margin: 0;
+  font-size: var(--text-l);
+  font-weight: var(--weight-medium);
+}
+
+.up-picker__hint {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-s);
+}
+
+.up-picker__actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+/* The camera button shows on touch devices only. */
+.up-picker__camera {
+  display: none;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .up-picker__camera {
+    display: inline-flex;
+  }
+
+  /* Drag and drop does not exist on touch devices. */
+  .up-picker__draghint {
+    display: none;
+  }
+}
+
+@media (min-width: 40rem) {
+  .up-picker__actions {
+    flex-direction: row;
+    justify-content: center;
+  }
+}
+
+/* Hide the default list and header of the Quasar uploader. */
+.up-picker .q-uploader__header,
+.up-picker .q-uploader__list {
+  display: none;
+}

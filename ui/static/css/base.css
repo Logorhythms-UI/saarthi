@@ -1,0 +1,86 @@
+/* Base rules: page, text, focus ring, reduced motion. No colour values here. */
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-page);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-m);
+  line-height: var(--leading);
+}
+
+/* Main column. Wide screens: centred. Phones: full width with a gutter. */
+.up-page {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--page-max);
+  margin: 0 auto;
+  padding: var(--space-5) var(--page-gutter) var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* Card: a white surface with a thin border. */
+.up-card {
+  box-sizing: border-box;
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-l);
+  padding: var(--space-5);
+}
+
+/* Buttons. Applied to q-btn without a colour prop. */
+.up-btn {
+  box-sizing: border-box;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-m);
+  font-family: inherit;
+  font-size: var(--text-m);
+  font-weight: var(--weight-medium);
+  transition: background-color var(--motion-fast) ease;
+}
+
+.up-btn--primary {
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+
+.up-btn--primary:hover {
+  background: var(--color-accent-hover);
+}
+
+.up-btn--secondary {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: var(--border-width) solid var(--color-border-strong);
+}
+
+.up-btn--secondary:hover {
+  background: var(--color-accent-soft);
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+@media (min-width: 40rem) {
+  :root {
+    --page-gutter: var(--space-5);
+  }
+}

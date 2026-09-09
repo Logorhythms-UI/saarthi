@@ -1,0 +1,34 @@
+/* status_badge: a text label for each item status. */
+
+.up-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.75rem;
+  padding: 0 var(--space-3);
+  border-radius: 999px;
+  font-size: var(--text-s);
+  font-weight: var(--weight-medium);
+  background: var(--color-neutral-soft);
+  color: var(--color-neutral);
+}
+
+.up-badge--sending {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.up-badge--stored {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.up-badge--duplicate {
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.up-badge--rejected,
+.up-badge--failed {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}

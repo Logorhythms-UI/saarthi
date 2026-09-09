@@ -1,0 +1,45 @@
+/* upload_row: one file in the queue. */
+
+.up-row {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3) var(--space-4);
+  min-height: var(--tap-min);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-m);
+}
+
+.up-row__main {
+  min-width: 0;
+}
+
+.up-row__name {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--weight-medium);
+}
+
+.up-row__meta {
+  margin: 0;
+  font-size: var(--text-s);
+  color: var(--color-text-muted);
+}
+
+.up-row__side {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Narrow phones: the status moves under the name. */
+@media (max-width: 26rem) {
+  .up-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

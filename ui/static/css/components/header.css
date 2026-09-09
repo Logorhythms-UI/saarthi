@@ -1,0 +1,28 @@
+/* app_header: product name and page title. */
+
+.up-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.up-header__product {
+  margin: 0;
+  font-size: var(--text-s);
+  font-weight: var(--weight-bold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-accent);
+}
+
+.up-header__title {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-bold);
+  line-height: 1.2;
+}
+
+.up-header__subtitle {
+  margin: 0;
+  color: var(--color-text-muted);
+}
