@@ -13,6 +13,12 @@ body {
   line-height: var(--leading);
 }
 
+/* NiceGUI wraps the page in this element. The layout is set in .up-page. */
+.nicegui-content {
+  padding: 0;
+  gap: 0;
+}
+
 /* Main column. Wide screens: centred. Phones: full width with a gutter. */
 .up-page {
   box-sizing: border-box;
@@ -31,7 +37,14 @@ body {
   background: var(--color-surface);
   border: var(--border-width) solid var(--color-border);
   border-radius: var(--radius-l);
-  padding: var(--space-5);
+  padding: var(--space-4);
+}
+
+/* Vertical stack of the blocks inside a card. */
+.up-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
 }
 
 /* Buttons. Applied to q-btn without a colour prop. */
@@ -82,5 +95,9 @@ body {
 @media (min-width: 40rem) {
   :root {
     --page-gutter: var(--space-5);
+  }
+
+  .up-card {
+    padding: var(--space-5);
   }
 }
