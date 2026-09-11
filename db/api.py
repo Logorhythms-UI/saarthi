@@ -10,8 +10,17 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+import numpy as np
 from peewee import IntegrityError, PeeweeException, SqliteDatabase
 
+from db.errors import (
+    ConfigError,
+    DbError,
+    DuplicateImageError,
+    InvalidRecordError,
+    InvalidStateError,
+    VectorIndexError,
+)
 from db.schema import (
     Image,
     ImageStatus,
@@ -20,6 +29,7 @@ from db.schema import (
     database_proxy,
     utc_now,
 )
+from db.vector_index import VectorIndex
 
 logger: logging.Logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -36,16 +46,13 @@ DEFAULT_CONFIG_PATH: Path = DB_DIR / "config.toml"
 MAX_STATUS_DETAIL_LENGTH: int = 500
 
 _PATH_KEYS: tuple[str, ...] = ("sqlite", "faiss_index")
+_VECTOR_KEYS: tuple[str, ...] = ("dimension", "checkpoint_every")
 _SQLITE_PRAGMAS: dict[str, object] = {
     "foreign_keys": 1,
     "journal_mode": "wal",
     "busy_timeout": 5000,
     "synchronous": "normal",
 }
-
-
-class ConfigError(Exception):
-    """Raised when `config.toml` is missing or has a wrong value."""
 
 
 @dataclass(frozen=True)
@@ -84,28 +91,14 @@ class RecoveryReport:
     unembedded_region_ids: list[int]
 
 
-class DbError(Exception):
-    """Base class of the errors that the query helpers raise."""
-
-
-class DuplicateImageError(DbError):
-    """Raised when `file_path` or `sha256` of an image already exists."""
-
-
-class InvalidStateError(DbError):
-    """Raised when an image does not exist or has the wrong status."""
-
-
-class InvalidRecordError(DbError):
-    """Raised when the database refuses a value (for example a bad box)."""
-
-
 @dataclass(frozen=True)
 class DbConfig:
     """Resolved settings of the db component."""
 
     sqlite_path: Path
     faiss_path: Path
+    vector_dimension: int
+    checkpoint_every: int
 
 
 def _resolve_inside_db_dir(key: str, value: object) -> Path:
@@ -118,6 +111,13 @@ def _resolve_inside_db_dir(key: str, value: object) -> Path:
     if not resolved.is_relative_to(DB_DIR):
         raise ConfigError(f"paths.{key} must stay inside the db folder")
     return resolved
+
+
+def _positive_int(table: str, key: str, value: object) -> int:
+    """Return `value` if it is a positive integer. Raise `ConfigError` if not."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{table}.{key} must be a positive integer")
+    return value
 
 
 def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> DbConfig:
@@ -138,20 +138,55 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> DbConfig:
         if key not in paths:
             raise ConfigError(f"Missing key paths.{key} in config")
 
+    vectors: object = raw.get("vectors")
+    if not isinstance(vectors, dict):
+        raise ConfigError("Missing [vectors] table in config")
+    for key in _VECTOR_KEYS:
+        if key not in vectors:
+            raise ConfigError(f"Missing key vectors.{key} in config")
+
     config: DbConfig = DbConfig(
         sqlite_path=_resolve_inside_db_dir("sqlite", paths["sqlite"]),
         faiss_path=_resolve_inside_db_dir("faiss_index", paths["faiss_index"]),
+        vector_dimension=_positive_int("vectors", "dimension", vectors["dimension"]),
+        checkpoint_every=_positive_int(
+            "vectors", "checkpoint_every", vectors["checkpoint_every"]
+        ),
     )
     logger.info("Loaded config from %s", config_path)
     return config
 
 
+# The open vector index. `init_db` sets it.
+_vector_index: VectorIndex | None = None
+
+
+def _replace_vector_index(config: DbConfig) -> None:
+    """Open the vector index of the config. Save the old one first, if any."""
+    global _vector_index
+    if _vector_index is not None and _vector_index.unsaved:
+        checkpoint_vectors()
+    try:
+        _vector_index = VectorIndex(
+            config.faiss_path, config.vector_dimension, config.checkpoint_every
+        )
+    except VectorIndexError as error:
+        logger.error("Cannot open the vector index: %s", error)
+        raise
+
+
+def _require_index() -> VectorIndex:
+    """Return the open vector index. Raise if `init_db` was not called."""
+    if _vector_index is None:
+        raise VectorIndexError("The vector index is not open. Call init_db first")
+    return _vector_index
+
+
 def init_db(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[SqliteDatabase, DbConfig]:
     """Open the database named in the config and create missing tables.
 
-    Return the database and the resolved config. The caller that owns the
-    FAISS index reads `faiss_path` from the config. This function is safe to
-    call more than once.
+    Also open the vector index named in the config. Return the database and
+    the resolved config. This function is safe to call more than once.
     """
     assert isinstance(config_path, Path), "config_path must be a Path"
     try:
@@ -178,6 +213,7 @@ def init_db(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[SqliteDatabase, Db
         )
         raise
     logger.info("Tables ready: image, region")
+    _replace_vector_index(config)
     return database, config
 
 
@@ -491,3 +527,74 @@ def recover_interrupted() -> RecoveryReport:
             len(unembedded),
         )
     return report
+
+
+def clear_regions_embedded(region_ids: list[int]) -> int:
+    """Set `embedding_model` to empty for these regions. Unknown ids are ignored.
+
+    Return the number of rows changed.
+    """
+    assert isinstance(region_ids, list), "region_ids must be a list"
+    assert all(isinstance(i, int) and i > 0 for i in region_ids), "ids must be positive"
+    if not region_ids:
+        return 0
+    with _translate_errors("clear_regions_embedded"):
+        return (
+            Region.update(embedding_model=None)
+            .where(Region.id.in_(set(region_ids)))
+            .execute()
+        )
+
+
+def store_region_vectors(
+    region_ids: list[int], vectors: np.ndarray, embedding_model: str
+) -> None:
+    """Add the vectors of regions to the index and mark the regions as embedded.
+
+    Do both steps or none. `vectors` has one float32 row of unit length for
+    each id, in the same order. The index is written to disk when enough
+    changes are unsaved (see `checkpoint_every` in `config.toml`).
+    """
+    assert isinstance(region_ids, list) and region_ids, "region_ids must not be empty"
+    assert isinstance(embedding_model, str) and embedding_model, "model name needed"
+
+    index: VectorIndex = _require_index()
+    index.add(region_ids, vectors)
+    try:
+        mark_regions_embedded(region_ids, embedding_model)
+    except DbError:
+        index.remove(region_ids)  # Keep the index and the tables in step
+        raise
+    logger.debug("Stored %d vector(s)", len(region_ids))
+    index.checkpoint_if_due()
+
+
+def remove_region_vectors(region_ids: list[int]) -> int:
+    """Remove the vectors of regions from the index and clear their marks.
+
+    Ids that are not in the index are ignored. Return how many vectors were
+    removed from the index.
+    """
+    assert isinstance(region_ids, list), "region_ids must be a list"
+    assert all(isinstance(i, int) and i > 0 for i in region_ids), "ids must be positive"
+
+    index: VectorIndex = _require_index()
+    removed: int = index.remove(region_ids)
+    clear_regions_embedded(region_ids)
+    logger.info("Removed %d vector(s) from the index", removed)
+    index.checkpoint_if_due()
+    return removed
+
+
+def checkpoint_vectors() -> None:
+    """Write the vector index to disk now.
+
+    The application calls this when it stops. Raise `VectorIndexError` if the
+    write fails.
+    """
+    _require_index().save()
+
+
+def vector_count() -> int:
+    """Return the number of vectors in the index."""
+    return _require_index().count
