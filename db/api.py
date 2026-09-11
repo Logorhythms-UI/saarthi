@@ -85,10 +85,24 @@ class RecoveryReport:
 
     # Images that were `processing` and are `pending` again.
     reset_image_ids: list[int]
-    # Deleted regions that had a vector. The backend must remove these ids from FAISS.
+    # Deleted regions that had a vector. They must be removed from the index.
     stale_vector_ids: list[int]
-    # Regions of `done` images with no vector. The backend must decide what to do.
+    # Regions of `done` images with no vector.
     unembedded_region_ids: list[int]
+
+
+@dataclass(frozen=True)
+class StartupReport:
+    """Result of `startup_recovery`. The backend logs it. No action is needed."""
+
+    # Images that were `processing` and are `pending` again.
+    interrupted_image_ids: list[int]
+    # Done images that had a region with no vector. They are `pending` again.
+    requeued_image_ids: list[int]
+    # Vectors that the index had and the tables did not know. They are removed.
+    orphan_vectors_removed: int
+    # Marks that the tables had and the index did not. They are cleared.
+    missing_vectors_cleared: int
 
 
 @dataclass(frozen=True)
@@ -466,11 +480,32 @@ def list_embedded_region_ids() -> list[int]:
         return [row.id for row in query]
 
 
+def _reset_images_to_pending(image_ids: list[int]) -> list[int]:
+    """Delete the regions of these images and set the images to `pending`.
+
+    Call it inside a transaction. Return the ids of the deleted regions that
+    had a vector. The caller removes them from the vector index.
+    """
+    if not image_ids:
+        return []
+    embedded_ids: list[int] = [
+        row.id
+        for row in Region.select(Region.id)
+        .where(Region.image.in_(image_ids), Region.embedding_model.is_null(False))
+        .order_by(Region.id)
+    ]
+    Region.delete().where(Region.image.in_(image_ids)).execute()
+    Image.update(
+        status=ImageStatus.PENDING.value, status_detail=None, processed_at=None
+    ).where(Image.id.in_(image_ids)).execute()
+    return embedded_ids
+
+
 def recover_interrupted() -> RecoveryReport:
     """Repair the database after a stop. Call it once at start-up.
 
-    Run it after `init_db` and before the workers start. It changes the
-    database only. The backend removes `stale_vector_ids` from the FAISS index.
+    This function changes the database only and leaves the vector index
+    alone. Most callers need `startup_recovery`, which also repairs the index.
 
     1. Each `processing` image goes back to `pending`.
     2. The regions of these images are deleted, so the retry cannot make
@@ -484,23 +519,7 @@ def recover_interrupted() -> RecoveryReport:
             .where(Image.status == ImageStatus.PROCESSING.value)
             .order_by(Image.id)
         ]
-        stale_vector_ids: list[int] = []
-        if interrupted:
-            stale_vector_ids = [
-                row.id
-                for row in Region.select(Region.id)
-                .where(
-                    Region.image.in_(interrupted),
-                    Region.embedding_model.is_null(False),
-                )
-                .order_by(Region.id)
-            ]
-            Region.delete().where(Region.image.in_(interrupted)).execute()
-            Image.update(
-                status=ImageStatus.PENDING.value,
-                status_detail=None,
-                processed_at=None,
-            ).where(Image.id.in_(interrupted)).execute()
+        stale_vector_ids: list[int] = _reset_images_to_pending(interrupted)
         unembedded: list[int] = [
             row.id
             for row in Region.select(Region.id)
@@ -598,3 +617,79 @@ def checkpoint_vectors() -> None:
 def vector_count() -> int:
     """Return the number of vectors in the index."""
     return _require_index().count
+
+
+def list_vector_ids() -> list[int]:
+    """Return the region ids that have a vector in the index, sorted."""
+    return sorted(_require_index().ids())
+
+
+def _requeue_images_with_gaps() -> tuple[list[int], list[int]]:
+    """Set `done` images with a region without a vector back to `pending`.
+
+    Return the image ids and the ids of the deleted regions that had a vector.
+    """
+    with (
+        _translate_errors("requeue images with gaps"),
+        database_proxy.atomic("IMMEDIATE"),
+    ):
+        gap_images = Region.select(Region.image).where(Region.embedding_model.is_null())
+        image_ids: list[int] = [
+            row.id
+            for row in Image.select(Image.id)
+            .where(Image.status == ImageStatus.DONE.value, Image.id.in_(gap_images))
+            .order_by(Image.id)
+        ]
+        return image_ids, _reset_images_to_pending(image_ids)
+
+
+def startup_recovery() -> StartupReport:
+    """Repair the tables and the vector index after a stop.
+
+    Call it once after `init_db` and before the workers start. The steps:
+
+    1. Each `processing` image goes back to `pending`. Its regions and
+       vectors are deleted, so the retry cannot make duplicates.
+    2. A vector that has no embedded region in the tables is removed.
+    3. An embedded mark that has no vector in the index is cleared.
+    4. A `done` image that has a region without a vector goes back to
+       `pending`. Its regions and vectors are deleted. The workers process
+       the image again.
+
+    Rule for the caller: every region of a `done` image must have a vector.
+    A region that never gets a vector would send its image back to `pending`
+    at every start.
+    """
+    index: VectorIndex = _require_index()
+
+    interrupted: RecoveryReport = recover_interrupted()
+    index.remove(interrupted.stale_vector_ids)
+
+    marked_ids: set[int] = set(list_embedded_region_ids())
+    vector_ids: set[int] = index.ids()
+    orphan_vectors_removed: int = index.remove(sorted(vector_ids - marked_ids))
+    missing_vectors_cleared: int = clear_regions_embedded(
+        sorted(marked_ids - vector_ids)
+    )
+
+    requeued_image_ids, gap_vector_ids = _requeue_images_with_gaps()
+    index.remove(gap_vector_ids)
+    index.checkpoint_if_due()
+
+    report: StartupReport = StartupReport(
+        interrupted_image_ids=interrupted.reset_image_ids,
+        requeued_image_ids=requeued_image_ids,
+        orphan_vectors_removed=orphan_vectors_removed,
+        missing_vectors_cleared=missing_vectors_cleared,
+    )
+    logger.info(
+        "Start-up recovery: %d interrupted image(s), %d requeued image(s), "
+        "%d orphan vector(s) removed, %d missing vector(s) cleared",
+        len(report.interrupted_image_ids),
+        len(report.requeued_image_ids),
+        report.orphan_vectors_removed,
+        report.missing_vectors_cleared,
+    )
+    if requeued_image_ids or orphan_vectors_removed or missing_vectors_cleared:
+        logger.warning("Start-up recovery repaired the tables or the vector index")
+    return report
