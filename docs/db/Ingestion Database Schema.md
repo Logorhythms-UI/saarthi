@@ -14,6 +14,7 @@ The object gallery, the last-seen table and the sighting log are not in this des
 ## Design rules
 
 - The server stores the vectors in a FAISS index, not in SQLite.
+- The db module owns both stores. The `backend` module uses `db/api.py` only.
 - `Region.id` is the vector id in the FAISS index. This is the only link between the two stores.
 - All timestamps are UTC.
 - `captured_at` is the time at which the server received the image. It is not the time in the image metadata.
@@ -84,12 +85,11 @@ The `backend` module controls this flow. The db module gives the helper for each
 | 3 | A worker takes the oldest `pending` image. The status becomes `processing` | `claim_next_pending` |
 | 4 | The worker saves the quality-gate values | `set_image_analysis` |
 | 5 | The worker inserts the regions. This gives the region ids | `add_regions` |
-| 6 | The worker adds the vectors to the FAISS index, with the region ids as vector ids | (FAISS, not in the db module) |
-| 7 | The worker sets `embedding_model` on each region | `mark_regions_embedded` |
-| 8 | The worker sets the final status | `mark_image_done`, `mark_image_rejected` or `mark_image_failed` |
+| 6 | The worker adds the vectors to the FAISS index, with the region ids as vector ids, and sets `embedding_model` on each region | `store_region_vectors` |
+| 7 | The worker sets the final status | `mark_image_done`, `mark_image_rejected` or `mark_image_failed` |
 
-If the server stops during step 6, some regions keep a null `embedding_model`.
-The start-up recovery finds them (see below).
+The `ai` module makes the vectors. The db module only stores them.
+If the server stops during step 6 or 7, the start-up recovery repairs the data (see below).
 
 ## Query helpers
 
@@ -106,12 +106,13 @@ Each helper uses peewee expressions only. No helper builds SQL from text.
 | `set_image_analysis(image_id, phash, blur_score)` | Save the quality-gate values | `Image` |
 | `add_regions(image_id, regions)` | Insert all regions in one transaction. An empty list is allowed | List of `Region` |
 | `get_regions(image_id)` | Read the regions, ordered by id | List of `Region` |
-| `mark_regions_embedded(region_ids, embedding_model)` | Record that the vectors are in FAISS. The helper changes all rows or none | Number of rows changed |
+| `mark_regions_embedded(region_ids, embedding_model)` | Record that the vectors are in FAISS. The helper changes all rows or none. The `backend` module uses `store_region_vectors` instead | Number of rows changed |
 | `mark_image_done(image_id)` | Set the status `done` | `Image` |
 | `mark_image_rejected(image_id, reason)` | Set the status `rejected` | `Image` |
 | `mark_image_failed(image_id, error)` | Set the status `failed` | `Image` |
 | `list_embedded_region_ids()` | List the ids of the regions that have a vector | List of integers |
-| `recover_interrupted()` | Repair the database after a stop | `RecoveryReport` |
+| `recover_interrupted()` | Reset interrupted images. It changes the tables only. The application uses `startup_recovery()` | `RecoveryReport` |
+| `startup_recovery()` | Repair the tables and the index after a stop (see below) | `StartupReport` |
 
 `add_regions` takes `NewRegion` objects. A `NewRegion` checks its own box:
 `x0` must be 0 or more and less than `x1`, and `y0` must be 0 or more and less than `y1`.
@@ -131,35 +132,83 @@ Do not put image content or personal data in this text.
 |-------|---------|
 | `ConfigError` | `config.toml` is missing or not correct |
 | `DbError` | Base class of the errors below. The helpers also raise it for other database errors |
+| `VectorIndexError` | The vector index refuses the call (for example, an id is already in the index, or the file cannot be read) |
 | `DuplicateImageError` | `file_path` or `sha256` is already in the database |
 | `InvalidStateError` | The image does not exist or has the wrong status. Also used when a region id does not exist |
 | `InvalidRecordError` | The database refuses a value |
 
+## Vector index
+
+The vectors are in a FAISS index. The index file path is `paths.faiss_index` in `db/config.toml`.
+
+- The index is an `IndexIDMap2` over `IndexFlatIP`. The vector id is `Region.id`.
+- All vectors have unit length. The inner product of two vectors is their cosine similarity.
+- The index search is exact. No training step is needed.
+- One lock protects the index, so workers in different threads can use it.
+- The index is held in memory. The db module writes it to disk with a temp file and then replaces the old file, so a failed write leaves the old file whole.
+
+### Vector helpers
+
+| Helper | Task | Result |
+|--------|------|--------|
+| `store_region_vectors(region_ids, vectors, embedding_model)` | Add the vectors to the index and mark the regions as embedded. If the database step fails, the helper removes the vectors again | `None`. Raises `VectorIndexError` or `DbError` |
+| `remove_region_vectors(region_ids)` | Remove vectors from the index and clear the marks. Unknown ids are ignored | Number of vectors removed |
+| `clear_regions_embedded(region_ids)` | Clear the `embedding_model` of regions. Unknown ids are ignored | Number of rows changed |
+| `checkpoint_vectors()` | Write the index to disk now | `None`. Raises `VectorIndexError` |
+| `vector_count()` | Count the vectors | Integer |
+| `list_vector_ids()` | List the region ids in the index | Sorted list of integers |
+
+`vectors` must be a `float32` array with the shape `(number of ids, dimension)`.
+Each row must have a length of 1.0 (a tolerance of 0.001 is allowed).
+The helper refuses a value that is not finite, a repeated id, and an id that is already in the index.
+When the helper refuses a call, it changes nothing.
+
+### Checkpoints
+
+The index is saved to disk in these cases:
+- After `vectors.checkpoint_every` added or removed vectors. This happens inside `store_region_vectors` and `remove_region_vectors`, after the database step is complete.
+- When the `backend` module calls `checkpoint_vectors()` at shutdown.
+
+A save error is written to the log and does not stop the ingestion. The next change tries again.
+A crash can lose the vectors that the file does not have yet. The start-up recovery repairs this.
+
 ## Start-up recovery
 
-The `backend` module calls `recover_interrupted()` one time at start.
+The `backend` module calls `startup_recovery()` one time at start.
 It must call it after `init_db()` and before it starts the workers.
-The helper changes the database only. It does not open the FAISS index.
 
-The helper does these steps in one write transaction:
+The helper does these steps:
 
 1. It finds the images with the status `processing`. A stop happened while a worker held them.
-2. It collects the ids of their regions that have a vector.
-3. It deletes all regions of these images. The retry makes new regions, so duplicates cannot occur.
-4. It sets these images to `pending` and clears `status_detail` and `processed_at`.
-5. It finds the regions of `done` images that have no vector. It does not change them.
+   It deletes their regions and vectors, and sets the images to `pending`. The retry makes new regions, so duplicates cannot occur.
+2. It removes each vector that has no embedded region in the tables (an orphan vector).
+   This happens when the server stops after the index change and before the database change.
+3. It clears each mark in the tables that has no vector in the index (a missing vector).
+   This happens when the server stops before the index is saved.
+4. It finds each `done` image that has a region without a vector (a gap).
+   It deletes the regions and vectors of this image and sets it to `pending`. The workers process the image again.
 
-The helper returns a `RecoveryReport`:
+The table changes run in write transactions and come before the index changes.
+If the server stops during the recovery, the next recovery finishes the work.
+You can run the recovery more than one time. A second run finds nothing to repair.
 
-| Field | Meaning | Action for the backend |
-|-------|---------|------------------------|
-| `reset_image_ids` | Images that are `pending` again | None. The workers pick them up |
-| `stale_vector_ids` | Deleted regions that had a vector | Remove these ids from the FAISS index |
-| `unembedded_region_ids` | Regions of `done` images with no vector | Decide: make the vectors again, or log and ignore |
+The helper returns a `StartupReport`:
 
-The db module cannot see the FAISS index.
-The backend must also find the opposite error: a vector in FAISS with no region row.
-Use `list_embedded_region_ids()` and compare the result with the ids in the FAISS index.
+| Field | Meaning |
+|-------|---------|
+| `interrupted_image_ids` | Images that were `processing` and are `pending` again |
+| `requeued_image_ids` | `done` images with a gap that are `pending` again |
+| `orphan_vectors_removed` | Number of orphan vectors that the helper removed |
+| `missing_vectors_cleared` | Number of marks that the helper cleared |
+
+The `backend` module writes the report to the log. It does not need to take other action.
+
+**Rule for the caller:** every region of a `done` image must have a vector.
+If the `backend` module inserts a region and does not make a vector for it,
+the recovery sets its image to `pending` at every start.
+
+`recover_interrupted()` does step 1 only, and only changes the tables.
+Use `startup_recovery()` in the application.
 
 ## Configuration
 
@@ -171,8 +220,13 @@ The loader refuses absolute paths and paths that leave the `db/` folder.
 |-----|---------|-------------|
 | `paths.sqlite` | `data/saarthi.db` | SQLite file |
 | `paths.faiss_index` | `data/regions.faiss` | FAISS index file |
+| `vectors.dimension` | `768` | Length of one vector. It must match the embedding model |
+| `vectors.checkpoint_every` | `200` | Save the index after this number of added or removed vectors |
 
-`init_db()` reads the file, opens the database, sets these SQLite options, and creates the missing tables:
+Both `vectors` keys must be positive integers.
+If the index file has a different dimension than `vectors.dimension`, `init_db()` raises `VectorIndexError`.
+
+`init_db()` reads the file, opens the database, sets these SQLite options, creates the missing tables, and opens the vector index:
 
 | Option | Value | Reason |
 |--------|-------|--------|
@@ -181,19 +235,16 @@ The loader refuses absolute paths and paths that leave the `db/` folder.
 | `busy_timeout` | 5000 ms | Wait for a lock before an error |
 | `synchronous` | `normal` | Good speed with WAL |
 
-The db component does not open the FAISS file.
-The component that owns the FAISS index reads `faiss_path` from the config that `init_db()` returns.
-
 ## Logging
 
 The module logs in this format: `{module}-{time}: {message}`.
 
 | Level | Event |
 |-------|-------|
-| DEBUG | An image or a group of regions is added, regions are marked as embedded |
-| INFO | The config is loaded, the database is open, the tables are ready, an image is claimed, an image gets a final status, the recovery summary |
-| WARNING | The recovery found work for the backend (stale vectors or regions without a vector) |
-| ERROR | The config is not valid, the database cannot open, or a database call fails |
+| DEBUG | An image or a group of regions is added, vectors are stored |
+| INFO | The config is loaded, the database and the index are open, the tables are ready, an image is claimed, an image gets a final status, the index is saved, vectors are removed, the recovery summary |
+| WARNING | The start-up recovery repaired the tables or the index, a temp file cannot be removed |
+| ERROR | The config is not valid, the database or the index cannot open, the index cannot be saved, or a database call fails |
 
 The default log level is INFO. DEBUG lines are not shown.
 
