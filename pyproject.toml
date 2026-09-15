@@ -11,9 +11,28 @@ dependencies = [
     "numpy==2.4.6",
     "peewee==4.3.0",
     "pillow==12.3.0",
+    "torch==2.13.0",
+    "torchvision==0.28.0",
+    "transformers==5.14.1",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
 ]
+
+# On x86 use the CPU-only torch wheel. The default wheel adds several GB of CUDA libraries.
+# On the Raspberry Pi (aarch64) the normal wheel is already CPU-only.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "platform_machine == 'x86_64'" }]
+
+[tool.pytest.ini_options]
+# Tests that load the real models are slow. Run them with: pytest -m slow
+markers = ["slow: loads the real models and may download them"]
+addopts = "-m 'not slow'"
