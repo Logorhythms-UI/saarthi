@@ -10,6 +10,7 @@ dependencies = [
     "nicegui==3.15.0",
     "numpy==2.4.6",
     "peewee==4.3.0",
+    "pillow==12.3.0",
 ]
 
 [dependency-groups]

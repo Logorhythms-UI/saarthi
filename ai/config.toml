@@ -1,0 +1,87 @@
+# Settings for the ai component.
+# The start values come from docs/ai/DINO-Based Object Recall Pipeline.md.
+# Tune them with the benchmark in benchmarks/ingestion.
+
+[models]
+# Models are pinned to a revision. Change the revision only after a test run.
+detector_id = "IDEA-Research/grounding-dino-tiny"
+detector_revision = "a2bb814dd30d776dcf7e30523b00659f4f141c71"
+embedder_id = "facebook/dinov2-small"
+embedder_revision = "ed25f3a31f01632728cabb09d1542f84ab7b0056"
+# "auto" uses a GPU if one exists, and the CPU if not. Other values: "cpu", "cuda".
+device = "auto"
+# Number of CPU threads for the models. 0 keeps the torch default.
+cpu_threads = 0
+# true: never download. Use it after the first download, on a network without internet.
+local_files_only = false
+
+[image]
+# Largest image that open_image accepts, in pixels (width x height).
+max_pixels = 40000000
+
+[quality]
+# An image with a blur score below this value is blurry. Compared on a copy
+# that is scaled to analysis_max_side.
+blur_min = 100.0
+analysis_max_side = 1024
+# Images whose hashes differ by this number of bits or less are near duplicates.
+phash_max_distance = 4
+# A region is not good enough for the identity check if its short side is
+# smaller than min_crop_side pixels, or its blur score is below crop_blur_min.
+min_crop_side = 24
+crop_blur_min = 20.0
+
+[detection]
+box_threshold = 0.25
+text_threshold = 0.20
+# Shortest side of the detector input, in pixels.
+input_short_edge = 800
+# Best boxes that one phrase can give.
+max_per_phrase = 10
+# Number of phrases in one detector pass. Each pass is a full model run.
+chunk_size = 30
+# Boxes with an IoU at or above this value are merged.
+nms_iou = 0.7
+# A box larger than this part of the frame, or with a side shorter than min_box_side, is dropped.
+max_frame_fraction = 0.6
+min_box_side = 12
+# A candidate with more than this part of its area inside a hand box is "in hand".
+hand_overlap = 0.3
+# A candidate with at least this part of its area inside a depiction box is dropped.
+depiction_inside = 0.8
+# Phrases of the objects to find. The product owner sets this list.
+default_phrases = [
+  "a bottle",
+  "a pair of glasses",
+  "a set of keys",
+  "a mobile phone",
+  "a wallet",
+  "a remote control",
+  "a cup",
+  "a watch",
+  "a pill box",
+  "a hearing aid",
+]
+# Phrases of small objects. They also run in the tiled pass. Each one must be in default_phrases.
+small_phrases = ["a set of keys", "a watch", "a pill box", "a hearing aid"]
+hand_phrase = "a hand"
+depiction_phrases = [
+  "a television screen",
+  "a computer monitor",
+  "a picture frame",
+  "a mirror",
+  "a poster",
+]
+generic_phrase = "an object"
+# Tiled pass for small objects: 2 x 2 tiles. It costs 4 more model runs.
+tiling_enabled = false
+tile_overlap = 0.2
+
+[embedding]
+# The DINOv2 patch size is 14 pixels. These sizes must be multiples of 14.
+frame_short_edge = 448
+frame_long_edge_max = 784
+crop_size = 224
+# A box with a side shorter than this value is embedded from a padded crop.
+small_box_min_side = 64
+crop_padding = 0.15
