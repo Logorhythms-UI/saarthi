@@ -1,0 +1,52 @@
+"""Plain data objects that the ai component returns."""
+
+from dataclasses import dataclass
+from typing import Literal
+
+Source = Literal["full", "tile", "generic"]
+
+
+@dataclass(frozen=True)
+class Box:
+    """A box in pixels. `x1` and `y1` are exclusive. The origin is the top-left corner."""
+
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+
+    def __post_init__(self) -> None:
+        assert all(isinstance(v, int) for v in (self.x0, self.y0, self.x1, self.y1))
+        assert self.x0 < self.x1 and self.y0 < self.y1, "box must not be empty"
+
+    @property
+    def width(self) -> int:
+        return self.x1 - self.x0
+
+    @property
+    def height(self) -> int:
+        return self.y1 - self.y0
+
+    @property
+    def area(self) -> int:
+        return self.width * self.height
+
+
+@dataclass(frozen=True)
+class QualityReport:
+    """Result of the image quality check."""
+
+    blur_score: float  # Variance of the Laplacian. A low value means a blurry image
+    phash: str  # 16 hex characters
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A box that might show an object of the vocabulary."""
+
+    box: Box
+    det_score: float  # Detector score. For analysis only, not for identity
+    source: Source
+    phrases: tuple[str, ...]  # Labels of all merged boxes
+    in_hand: bool
+    quality_ok: bool  # False if the crop is small, blurry or cut by the image edge

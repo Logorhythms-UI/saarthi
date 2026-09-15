@@ -1,7 +1,5 @@
 # Upload Page
 
-Oct 25, 2026 · @KS
-
 ## Purpose
 
 The upload page lets a user send pictures to the application.
