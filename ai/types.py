@@ -50,3 +50,13 @@ class Candidate:
     phrases: tuple[str, ...]  # Labels of all merged boxes
     in_hand: bool
     quality_ok: bool  # False if the crop is small, blurry or cut by the image edge
+
+
+@dataclass(frozen=True)
+class RawDetection:
+    """One box from one detector pass, before post-processing."""
+
+    box: Box
+    score: float
+    label: str  # Text label from the detector. It can be a part of a phrase
+    source: Source
