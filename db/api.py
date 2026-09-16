@@ -8,6 +8,7 @@ import tomllib
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 import numpy as np
@@ -281,6 +282,25 @@ def find_image_by_sha256(sha256: str) -> Image | None:
     assert isinstance(sha256, str) and len(sha256) == 64, "sha256 must have 64 chars"
     with _translate_errors("find_image_by_sha256"):
         return Image.get_or_none(Image.sha256 == sha256)
+
+
+def list_recent_phashes(since: datetime | None = None, limit: int = 200) -> list[str]:
+    """Return the perceptual hashes of `done` images, newest first.
+
+    Use it to check for near-duplicate uploads. SQLite cannot compare hashes
+    by Hamming distance, so the caller compares the list. `since` is a naive
+    UTC time. Images from before `since` are left out.
+    """
+    assert since is None or isinstance(since, datetime), "since must be a datetime"
+    assert isinstance(limit, int) and limit > 0, "limit must be positive"
+    with _translate_errors("list_recent_phashes"):
+        query = Image.select(Image.phash).where(
+            Image.status == ImageStatus.DONE.value, Image.phash.is_null(False)
+        )
+        if since is not None:
+            query = query.where(Image.captured_at >= since)
+        query = query.order_by(Image.captured_at.desc(), Image.id.desc()).limit(limit)
+        return [row.phash for row in query]
 
 
 def get_image(image_id: int) -> Image | None:

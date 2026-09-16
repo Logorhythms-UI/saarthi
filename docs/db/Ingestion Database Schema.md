@@ -220,7 +220,7 @@ The loader refuses absolute paths and paths that leave the `db/` folder.
 |-----|---------|-------------|
 | `paths.sqlite` | `data/saarthi.db` | SQLite file |
 | `paths.faiss_index` | `data/regions.faiss` | FAISS index file |
-| `vectors.dimension` | `768` | Length of one vector. It must match the embedding model |
+| `vectors.dimension` | `384` | Length of one vector. It must match the embedding model |
 | `vectors.checkpoint_every` | `200` | Save the index after this number of added or removed vectors |
 
 Both `vectors` keys must be positive integers.

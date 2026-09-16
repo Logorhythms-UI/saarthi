@@ -12,11 +12,13 @@ import numpy as np
 import pytest
 from PIL import Image, ImageDraw
 
+from ai.api import AiEngine
 from ai.detector import CandidateDetector
 from ai.embedder import RegionEmbedder
 from ai.postprocess import select_candidates
 from ai.settings import AiConfig, load_config
 from ai.types import Box, RawDetection
+from db.api import load_config as load_db_config
 
 pytestmark = pytest.mark.slow
 
@@ -127,3 +129,16 @@ def test_real_photo_end_to_end(
     )
     vectors: np.ndarray = embedder.embed(image, [c.box for c in candidates])
     assert vectors.shape == (len(candidates), 384)
+
+
+def test_engine_runs_the_stages_and_matches_the_db_vector_size(
+    config: AiConfig,
+) -> None:
+    engine: AiEngine = AiEngine(config)
+    assert engine.embedding_dimension == load_db_config().vector_dimension
+    image: Image.Image = synthetic_image()
+    report = engine.assess_quality(image)
+    assert not engine.is_near_duplicate(report.phash, [])
+    candidates = engine.detect_candidates(image)
+    vectors: np.ndarray = engine.embed_regions(image, [c.box for c in candidates])
+    assert vectors.shape == (len(candidates), engine.embedding_dimension)

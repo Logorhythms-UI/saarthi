@@ -5,6 +5,7 @@ Every test makes its own rows with the path prefix `__test__/` and removes them.
 
 import uuid
 from collections.abc import Iterator
+from datetime import timedelta
 
 import pytest
 
@@ -21,6 +22,7 @@ from db.api import (
     get_regions,
     init_db,
     list_embedded_region_ids,
+    list_recent_phashes,
     mark_image_done,
     mark_image_failed,
     mark_image_rejected,
@@ -281,3 +283,32 @@ def test_recover_interrupted_reports_done_regions_without_vector() -> None:
     assert report.reset_image_ids == []
     assert get_image(image.id).status == ImageStatus.DONE.value
     assert len(get_regions(image.id)) == 2
+
+
+def test_list_recent_phashes_returns_done_images_newest_first() -> None:
+    skip_if_real_rows(ImageStatus.DONE)
+    now = utc_now()
+    old: Image = new_image()
+    mid: Image = new_image()
+    new: Image = new_image()
+    pending: Image = new_image()
+    for image, phash, age, status in [
+        (old, "a" * 16, timedelta(hours=5), ImageStatus.DONE),
+        (mid, "b" * 16, timedelta(hours=2), ImageStatus.DONE),
+        (new, "c" * 16, timedelta(minutes=1), ImageStatus.DONE),
+        (pending, "d" * 16, timedelta(minutes=2), ImageStatus.PENDING),
+    ]:
+        Image.update(phash=phash, captured_at=now - age, status=status.value).where(
+            Image.id == image.id
+        ).execute()
+    assert list_recent_phashes() == ["c" * 16, "b" * 16, "a" * 16]
+    assert list_recent_phashes(limit=2) == ["c" * 16, "b" * 16]
+    assert list_recent_phashes(since=now - timedelta(hours=3)) == ["c" * 16, "b" * 16]
+    assert list_recent_phashes(since=now) == []
+
+
+def test_list_recent_phashes_ignores_done_images_without_a_hash() -> None:
+    skip_if_real_rows(ImageStatus.DONE)
+    image: Image = new_image()
+    set_status(image, ImageStatus.DONE)
+    assert list_recent_phashes() == []
