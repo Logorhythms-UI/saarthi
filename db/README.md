@@ -45,7 +45,7 @@ sqlite = "data/saarthi.db"
 faiss_index = "data/regions.faiss"
 
 [vectors]
-dimension = 768
+dimension = 384
 checkpoint_every = 200
 ```
 

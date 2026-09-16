@@ -28,7 +28,7 @@ from db.schema import Image, ImageStatus, Region, RegionSource
 
 TEST_PREFIX: str = "__test__/"
 MODEL: str = "test-model"
-DIMENSION: int = 768  # Same as vectors.dimension in config.toml
+DIMENSION: int = 384  # Same as vectors.dimension in config.toml
 
 
 @pytest.fixture(scope="module", autouse=True)

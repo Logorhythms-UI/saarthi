@@ -7,7 +7,7 @@ faiss_index = "data/regions.faiss"
 
 [vectors]
 # Length of one embedding vector. It must match the embedding model.
-dimension = 768
+dimension = 384
 # The index is written to disk after this many added or removed vectors,
 # and when the application stops. A crash can lose at most this many
 # vectors. The start-up recovery repairs the loss.
