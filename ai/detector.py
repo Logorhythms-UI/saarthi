@@ -75,8 +75,12 @@ class CandidateDetector:
         phrases: Sequence[str],
         small_phrases: Sequence[str] = (),
         include_generic: bool = False,
+        tiling: bool | None = None,
     ) -> list[RawDetection]:
-        """Return the raw boxes of all passes. `ai.postprocess` cleans them up."""
+        """Return the raw boxes of all passes. `ai.postprocess` cleans them up.
+
+        `tiling` switches the tiled pass for this call. None uses the config.
+        """
         assert isinstance(image, Image.Image), "image must be a PIL image"
         assert phrases, "phrases must not be empty"
         cfg = self._config.detection
@@ -93,7 +97,8 @@ class CandidateDetector:
             passes += 1
 
         small: list[str] = [p for p in phrases if p in set(small_phrases)]
-        if cfg.tiling_enabled and small and min(width, height) >= 2:
+        use_tiling: bool = cfg.tiling_enabled if tiling is None else tiling
+        if use_tiling and small and min(width, height) >= 2:
             tile_extras: list[str] = [cfg.hand_phrase]
             tiles: list[Tile] = tile_grid(width, height, cfg.tile_overlap)
             for prompt in plan_prompts(

@@ -8,6 +8,7 @@ from ai.postprocess import (
     MAX_PROMPT_TOKENS,
     apply_crop_quality,
     match_phrase,
+    match_phrases,
     plan_prompts,
     select_candidates,
 )
@@ -205,3 +206,64 @@ def test_plan_prompts_single_prompt_when_everything_fits() -> None:
 def test_plan_prompts_refuses_extras_that_fill_the_prompt() -> None:
     with pytest.raises(ValueError):
         plan_prompts(["a cup"], ["word " * 300], 30, fake_tokens)
+
+
+KNOWN: list[str] = [
+    *VOCABULARY,
+    "a hand",
+    "a mirror",
+    "a television screen",
+    "an object",
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("a mobile phone a mirror", ["a mobile phone", "a mirror"]),
+        ("a bottle a hand a mirror", ["a bottle", "a hand", "a mirror"]),
+        ("a a hand", ["a hand"]),
+        ("a pair of glasses a set of keys", ["a pair of glasses", "a set of keys"]),
+        ("bottle", ["a bottle"]),
+        ("a bottle a bottle", ["a bottle"]),
+        ("", []),
+        ("a", []),
+    ],
+)
+def test_match_phrases_splits_a_joined_label(label: str, expected: list[str]) -> None:
+    vocabulary: list[str] = [*KNOWN, "a mobile phone"]
+    assert match_phrases(label, vocabulary) == expected
+
+
+def test_a_box_with_an_object_phrase_stays_an_object_even_with_a_screen_phrase() -> (
+    None
+):
+    # The real detector joins weak extra phrases to the label of a good box.
+    result: list[Candidate] = select(
+        [raw((373, 278, 453, 389), "a bottle a hand a mirror", 0.44)]
+    )
+    assert [c.phrases for c in result] == [("a bottle",)]
+    assert not result[0].in_hand
+
+
+def test_a_box_without_an_object_phrase_is_a_hand_or_a_screen() -> None:
+    result: list[Candidate] = select(
+        [
+            raw((100, 100, 200, 200), "a a hand", 0.5),
+            raw((120, 120, 160, 160), "bottle", 0.6),
+            raw((600, 100, 760, 300), "a mirror", 0.5),
+            raw((620, 120, 700, 200), "keys", 0.6),
+        ]
+    )
+    assert {c.phrases[0]: c.in_hand for c in result} == {"a bottle": True}
+
+
+def test_a_box_that_covers_most_of_the_frame_is_dropped_for_every_kind() -> None:
+    result: list[Candidate] = select(
+        [
+            raw((5, 21, 962, 722), "a hand a mirror", 0.18),  # Over 60 % of the frame
+            raw((300, 300, 380, 380), "a bottle", 0.5),
+        ]
+    )
+    assert [c.phrases for c in result] == [("a bottle",)]
+    assert not result[0].in_hand

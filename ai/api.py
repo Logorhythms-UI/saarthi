@@ -108,11 +108,13 @@ class AiEngine:
         phrases: list[str] | None = None,
         small_phrases: list[str] | None = None,
         include_generic: bool = False,
+        tiling: bool | None = None,
     ) -> list[Candidate]:
         """Find boxes that might show an object. The best score comes first.
 
         Without `phrases`, the phrases of `config.toml` are used. Set
-        `include_generic` for the extra pass with the phrase "an object".
+        `include_generic` for the extra pass with the phrase "an object". `tiling`
+        switches the tiled pass for this call. None uses the config.
         """
         assert isinstance(image, Image.Image), "image must be a PIL image"
         cfg = self._config.detection
@@ -125,7 +127,7 @@ class AiEngine:
             if small_phrases is not None
             else [p for p in cfg.small_phrases if p in chosen]
         )
-        raw = self._detector.detect(image, chosen, small, include_generic)
+        raw = self._detector.detect(image, chosen, small, include_generic, tiling)
         candidates: list[Candidate] = select_candidates(
             raw, image.width, image.height, chosen, cfg
         )

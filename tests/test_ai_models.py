@@ -4,10 +4,6 @@ Run them with: uv run pytest -m slow
 Set SAARTHI_TEST_IMAGE to the path of a photo to also test detection on a real picture.
 """
 
-import dataclasses
-import os
-from pathlib import Path
-
 import numpy as np
 import pytest
 from PIL import Image, ImageDraw
@@ -19,6 +15,7 @@ from ai.postprocess import select_candidates
 from ai.settings import AiConfig, load_config
 from ai.types import Box, RawDetection
 from db.api import load_config as load_db_config
+from tests.image_support import TEST_IMAGE
 
 pytestmark = pytest.mark.slow
 
@@ -86,18 +83,15 @@ def test_embedder_refuses_a_box_outside_the_image(embedder: RegionEmbedder) -> N
 
 
 def test_detector_runs_all_three_passes(
-    detector: CandidateDetector, config: AiConfig, monkeypatch: pytest.MonkeyPatch
+    detector: CandidateDetector, config: AiConfig
 ) -> None:
-    tiled: AiConfig = dataclasses.replace(
-        config, detection=dataclasses.replace(config.detection, tiling_enabled=True)
-    )
-    monkeypatch.setattr(detector, "_config", tiled)
     image: Image.Image = synthetic_image()
     detections: list[RawDetection] = detector.detect(
         image,
         config.detection.default_phrases,
         config.detection.small_phrases,
         include_generic=True,
+        tiling=True,
     )
     for detection in detections:
         box: Box = detection.box
@@ -110,15 +104,11 @@ def test_token_count(detector: CandidateDetector) -> None:
     assert detector.count_tokens("a pair of glasses") >= 4
 
 
-@pytest.mark.skipif(
-    not os.environ.get("SAARTHI_TEST_IMAGE"), reason="SAARTHI_TEST_IMAGE is not set"
-)
+@pytest.mark.skipif(TEST_IMAGE is None, reason="no test photo (set SAARTHI_TEST_IMAGE)")
 def test_real_photo_end_to_end(
     detector: CandidateDetector, embedder: RegionEmbedder, config: AiConfig
 ) -> None:
-    image: Image.Image = Image.open(Path(os.environ["SAARTHI_TEST_IMAGE"])).convert(
-        "RGB"
-    )
+    image: Image.Image = Image.open(TEST_IMAGE).convert("RGB")
     raw: list[RawDetection] = detector.detect(image, config.detection.default_phrases)
     candidates = select_candidates(
         raw,
