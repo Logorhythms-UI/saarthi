@@ -13,7 +13,6 @@ from db.api import (
     get_image,
     get_regions,
     init_db,
-    list_embedded_region_ids,
     list_vector_ids,
     startup_recovery,
     store_region_vectors,
@@ -26,6 +25,7 @@ from tests.db_support import (
     make_image,
     make_regions,
     set_status,
+    skip_if_actual_data_has_problems,
     unit_vectors,
 )
 
@@ -43,20 +43,7 @@ def actual_database() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def guard_and_cleanup() -> Iterator[None]:
     """Skip if the actual data has a problem. Remove the test data afterwards."""
-    problems: list[str] = []
-    if Image.select().where(Image.status == ImageStatus.PROCESSING.value).exists():
-        problems.append("processing images")
-    gap = Region.select(Region.image).where(Region.embedding_model.is_null())
-    if (
-        Image.select()
-        .where(Image.status == ImageStatus.DONE.value, Image.id.in_(gap))
-        .exists()
-    ):
-        problems.append("done images with a region without a vector")
-    if set(list_vector_ids()) != set(list_embedded_region_ids()):
-        problems.append("a difference between the index and the tables")
-    if problems:
-        pytest.skip("Actual database has: " + ", ".join(problems))
+    skip_if_actual_data_has_problems()
     yield
     leftover: list[int] = [
         r.id

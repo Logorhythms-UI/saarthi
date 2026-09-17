@@ -73,8 +73,10 @@ class FakeDetector:
         self.detections: list[RawDetection] = detections
         self.calls: list[tuple] = []
 
-    def detect(self, image, phrases, small_phrases=(), include_generic=False):
-        self.calls.append((list(phrases), list(small_phrases), include_generic))
+    def detect(
+        self, image, phrases, small_phrases=(), include_generic=False, tiling=None
+    ):
+        self.calls.append((list(phrases), list(small_phrases), include_generic, tiling))
         return self.detections
 
 
@@ -126,21 +128,24 @@ def test_near_duplicate_check() -> None:
 def test_detect_candidates_uses_the_config_phrases_by_default() -> None:
     engine, detector = make_engine()
     assert engine.detect_candidates(noise_image()) == []
-    phrases, small, generic = detector.calls[0]
+    phrases, small, generic, tiling = detector.calls[0]
     assert phrases == list(CONFIG.detection.default_phrases)
     assert small == list(CONFIG.detection.small_phrases)
-    assert generic is False
+    assert generic is False and tiling is None
 
 
 def test_detect_candidates_passes_custom_phrases_and_the_generic_switch() -> None:
     engine, detector = make_engine()
     engine.detect_candidates(
-        noise_image(), phrases=["a bottle", "a set of keys"], include_generic=True
+        noise_image(),
+        phrases=["a bottle", "a set of keys"],
+        include_generic=True,
+        tiling=True,
     )
-    phrases, small, generic = detector.calls[0]
+    phrases, small, generic, tiling = detector.calls[0]
     assert phrases == ["a bottle", "a set of keys"]
     assert small == ["a set of keys"]  # Only the small phrases that are in use
-    assert generic is True
+    assert generic is True and tiling is True
 
 
 def test_detect_candidates_cleans_up_and_marks_quality() -> None:
