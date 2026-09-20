@@ -101,6 +101,7 @@ Each helper uses peewee expressions only. No helper builds SQL from text.
 |--------|------|--------|
 | `add_image(file_path, sha256, width, height, room=None)` | Insert an image with the status `pending`. `captured_at` is the time of the call. The path must be relative and must not contain `..` | `Image`. Raises `DuplicateImageError` |
 | `find_image_by_sha256(sha256)` | Find an image by hash | `Image` or `None` |
+| `list_recent_phashes(since=None, limit=200)` | List the perceptual hashes of `done` images, newest first. SQLite cannot compare hashes by Hamming distance, so the caller compares the list (`AiEngine.is_near_duplicate`) | List of text |
 | `get_image(image_id)` | Read one image | `Image` or `None` |
 | `claim_next_pending()` | In one write transaction, set the oldest `pending` image to `processing`. Two workers cannot get the same image | `Image` or `None` |
 | `set_image_analysis(image_id, phash, blur_score)` | Save the quality-gate values | `Image` |
@@ -111,6 +112,9 @@ Each helper uses peewee expressions only. No helper builds SQL from text.
 | `mark_image_rejected(image_id, reason)` | Set the status `rejected` | `Image` |
 | `mark_image_failed(image_id, error)` | Set the status `failed` | `Image` |
 | `list_embedded_region_ids()` | List the ids of the regions that have a vector | List of integers |
+| `list_images_older_than(cutoff, limit=100)` | List the oldest `done`, `rejected` and `failed` images that were captured before `cutoff`. An image that waits or is in use is never listed | List of `Image` |
+| `delete_images(image_ids)` | Delete the images and their regions (by cascade), then remove their vectors from the index. Unknown ids are ignored. If one image is `processing`, the helper raises `InvalidStateError` and deletes nothing | The `file_path` of each deleted image |
+| `list_image_paths()` | List the `file_path` of every image, sorted | List of text |
 | `recover_interrupted()` | Reset interrupted images. It changes the tables only. The application uses `startup_recovery()` | `RecoveryReport` |
 | `startup_recovery()` | Repair the tables and the index after a stop (see below) | `StartupReport` |
 
@@ -136,6 +140,13 @@ Do not put image content or personal data in this text.
 | `DuplicateImageError` | `file_path` or `sha256` is already in the database |
 | `InvalidStateError` | The image does not exist or has the wrong status. Also used when a region id does not exist |
 | `InvalidRecordError` | The database refuses a value |
+
+### Retention and delete order
+
+`delete_images` deletes the rows first. The vectors are removed after the transaction.
+The caller deletes the files last (`storage.delete_images`).
+A stop in between leaves orphan files or orphan vectors. The orphan check of the storage module
+and `startup_recovery` repair them. The opposite order would leave rows that point to files that do not exist.
 
 ## Vector index
 

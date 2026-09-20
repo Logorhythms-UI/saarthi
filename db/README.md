@@ -79,6 +79,7 @@ All helpers are in `api.py`. The helpers return `Image` and `Region` objects.
 |--------|------|
 | `add_image` | Insert an image with the status `pending` |
 | `find_image_by_sha256` | Find an image with the same hash (duplicate upload) |
+| `list_recent_phashes` | List the perceptual hashes of `done` images, newest first (near-duplicate check) |
 | `get_image` | Read one image |
 | `claim_next_pending` | Set the oldest `pending` image to `processing` |
 | `set_image_analysis` | Save `phash` and `blur_score` of a `processing` image |
@@ -87,6 +88,9 @@ All helpers are in `api.py`. The helpers return `Image` and `Region` objects.
 | `mark_image_done` | Set a `processing` image to `done` |
 | `mark_image_rejected` | Set a `processing` image to `rejected`, with a reason |
 | `mark_image_failed` | Set a `processing` image to `failed`, with an error text |
+| `list_images_older_than` | List `done`, `rejected` and `failed` images captured before a time (retention) |
+| `delete_images` | Delete images, their regions and their vectors. Returns the file paths for the storage module |
+| `list_image_paths` | List the file path of every image (orphan and missing file checks) |
 
 A helper that changes the status of an image works only from the correct status.
 If the status is not correct, the helper raises `InvalidStateError`.
