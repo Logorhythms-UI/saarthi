@@ -1,0 +1,28 @@
+# Settings for the storage component.
+
+[location]
+# Folder for the image files.
+# A relative path starts in the storage/ folder and must stay inside it.
+# An absolute path (for example a mounted SSD) is also allowed.
+root = "uploads"
+
+[limits]
+# Largest upload that prepare_image accepts, in bytes. The same as the UI limit.
+max_bytes = 15728640
+# Largest image, in pixels (width x height). Keep it equal to [image] max_pixels in ai/config.toml.
+max_pixels = 40000000
+# New images are refused when the disk would have less free space than this.
+min_free_bytes = 1073741824
+
+[image]
+# Every image is saved as a JPEG with this quality (1 to 95).
+jpeg_quality = 95
+
+[retention]
+# Images older than this number of days can be deleted. 0 keeps all images.
+days = 0
+
+[cleanup]
+# A file that the database does not know is an orphan only after this time.
+# This protects a file that was just written and has no database row yet.
+orphan_grace_seconds = 3600
