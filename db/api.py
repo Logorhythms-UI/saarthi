@@ -639,6 +639,79 @@ def vector_count() -> int:
     return _require_index().count
 
 
+# Statuses of images that no worker uses. Only these are old enough to be deleted.
+_FINAL_STATUSES: tuple[str, ...] = (
+    ImageStatus.DONE.value,
+    ImageStatus.REJECTED.value,
+    ImageStatus.FAILED.value,
+)
+
+
+def list_images_older_than(cutoff: datetime, limit: int = 100) -> list[Image]:
+    """Return the oldest images that were captured before `cutoff`.
+
+    Only `done`, `rejected` and `failed` images are listed, so an image that
+    waits for a worker or is in use is never a candidate. `cutoff` is a naive
+    UTC time. The oldest image comes first.
+    """
+    assert isinstance(cutoff, datetime), "cutoff must be a datetime"
+    assert isinstance(limit, int) and limit > 0, "limit must be positive"
+    with _translate_errors("list_images_older_than"):
+        return list(
+            Image.select()
+            .where(Image.status.in_(_FINAL_STATUSES), Image.captured_at < cutoff)
+            .order_by(Image.captured_at, Image.id)
+            .limit(limit)
+        )
+
+
+def list_image_paths() -> list[str]:
+    """Return the `file_path` of every image, sorted. Use it to compare with the files on disk."""
+    with _translate_errors("list_image_paths"):
+        return [
+            row.file_path
+            for row in Image.select(Image.file_path).order_by(Image.file_path)
+        ]
+
+
+def delete_images(image_ids: list[int]) -> list[str]:
+    """Delete images, their regions and their vectors. Return their `file_path` values.
+
+    The caller deletes the files after this call. The rows go first on
+    purpose: a stop in between leaves files that no row owns (found by
+    `storage.find_orphan_files`), and not rows without a file.
+    Unknown ids are ignored. If one image is `processing`, raise
+    `InvalidStateError` and delete nothing.
+    """
+    assert isinstance(image_ids, list), "image_ids must be a list"
+    assert all(isinstance(i, int) and i > 0 for i in image_ids), "ids must be positive"
+    if not image_ids:
+        return []
+
+    index: VectorIndex = _require_index()
+    with _translate_errors("delete_images"), database_proxy.atomic("IMMEDIATE"):
+        images: list[Image] = list(Image.select().where(Image.id.in_(set(image_ids))))
+        busy: list[int] = [
+            i.id for i in images if i.status == ImageStatus.PROCESSING.value
+        ]
+        if busy:
+            raise InvalidStateError(f"Images are in use and cannot be deleted: {busy}")
+        found_ids: list[int] = [i.id for i in images]
+        vector_ids: list[int] = [
+            row.id
+            for row in Region.select(Region.id).where(
+                Region.image.in_(found_ids), Region.embedding_model.is_null(False)
+            )
+        ]
+        paths: list[str] = [i.file_path for i in images]
+        Image.delete().where(Image.id.in_(found_ids)).execute()  # Regions go by cascade
+
+    index.remove(vector_ids)
+    index.checkpoint_if_due()
+    logger.info("Deleted %d image(s) and %d vector(s)", len(paths), len(vector_ids))
+    return paths
+
+
 def list_vector_ids() -> list[int]:
     """Return the region ids that have a vector in the index, sorted."""
     return sorted(_require_index().ids())
