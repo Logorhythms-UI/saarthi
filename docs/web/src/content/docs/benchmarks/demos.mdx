@@ -1,0 +1,46 @@
+---
+title: Demonstrations
+description: Videos and screenshots of the prototype from 7 September 2026.
+group: Benchmarks and demos
+order: 4
+---
+
+The recordings below show the September prototype. This prototype used the earlier design: YOLO for broad detection, SigLIP2 and DINOv2 vectors, a Llama normalizer, and Grounding DINO for verification.
+
+The system ran on a laptop CPU. A search took about 15 to 20 seconds.
+
+## Upload and ingestion
+
+<Demo name="object-ingestion" title="Object ingestion">
+The user uploads ten images one by one. Each image becomes the newest memory. The server logs show that the system stores each file, detects objects, and saves the vectors.
+</Demo>
+
+<Figure src="/media/ingestion-logs.jpg" alt="Server log lines that show uploaded images, detected objects, and saved vectors" caption="Server log of the ingestion. The log lists each upload, the objects that the detector found, and the vectors that the system saved." />
+
+## Memory browser
+
+<Figure src="/media/memory-browser.jpg" alt="The Memory Browser page with ten stored images, newest first" caption="The Memory Browser shows the stored images, newest first. Each image has a number, a hash, and a time." />
+
+## Search
+
+Each demonstration shows the query, the normalized query, and the result.
+
+<Demo name="water-bottle" title="Find a water bottle" query="I can't find the thing from which I drink water">
+The language model changes the query to "water bottle". The result page shows the score, the grounding value, the capture time, and the number of candidates. The box on the image marks the bottle.
+</Demo>
+
+<Demo name="black-bag" title="Find a black bag" query="I can't find this black thing I use to carry around other stuff with me">
+The model changes the query to "black bag". The system shows the backpack with a box and a confidence value of 93%.
+</Demo>
+
+<Demo name="notebook" title="Find a book" query="I have a book with me that I cannot seem to find now">
+The model changes the query to "book". The system shows a stored image of the book.
+</Demo>
+
+<Demo name="invalid-object" title="Object that is not in memory" query="I seem to have lost that thing I use to write down stuff">
+The model changes the query to "pen". No stored image shows a pen. The score stays below the threshold, and the system answers that it did not find the object. This shows the not-found state.
+</Demo>
+
+## Benchmark tool
+
+The benchmark process images are on the page [Benchmark method](/docs/benchmarks/methodology/).

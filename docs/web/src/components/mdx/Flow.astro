@@ -1,0 +1,17 @@
+---
+import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
+import { ArrowRight } from "lucide-react";
+interface Props { steps: { title: string; text: string }[] }
+const { steps } = Astro.props;
+---
+<div class="not-prose my-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(11rem,1fr))]">
+  {steps.map((s, i) => (
+    <Card size="sm" class="relative">
+      <CardHeader>
+        <p class="text-xs font-medium text-muted-foreground">Step {i + 1}</p>
+        <CardTitle>{s.title}</CardTitle>
+      </CardHeader>
+      <CardContent class="text-sm text-muted-foreground">{s.text}</CardContent>
+    </Card>
+  ))}
+</div>

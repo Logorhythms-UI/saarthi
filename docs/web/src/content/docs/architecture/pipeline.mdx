@@ -1,0 +1,67 @@
+---
+title: Recall pipeline
+description: The three flows of the DINO pipeline - enrollment, ingestion, and query.
+group: Architecture and pipeline
+order: 2
+---
+
+The recall pipeline splits the job in two. Grounding DINO answers, "Where are the candidate objects?" DINO embeddings answer, "Is this one the owner's object?"
+
+## Design principles
+
+- **Detector for recall, embedder for precision.** The detector uses a low threshold so that it rarely misses the object. The embedding match rejects objects that are not the owner's.
+- **One prompt for all objects.** The prompt lists the category names of all registered objects. For example: `a bottle. a pair of glasses. a set of keys.`
+- **Recency by design.** A match updates a last-seen table. A newest-first scan of the region archive is the fallback.
+- **Look-alikes are data.** The owner can register similar items as negatives. A match must beat them by a margin.
+
+## The three flows
+
+<Flow steps={[
+  { title: "Enrollment", text: "The carer registers each object with 5 to 10 photos. This happens once per object." },
+  { title: "Ingestion", text: "Every new image is checked, searched for objects, and matched against the gallery." },
+  { title: "Query", text: "The user asks. The system reads the last-seen table and shows the answer." },
+]} />
+
+## Stage table
+
+| # | Stage | Runs | Method | Output |
+|---|-------|------|--------|--------|
+| E1 | Capture references | Once per object | Carer app. 5 to 10 photos, a name, a category word. | Reference set |
+| E2 | Locate the object | Once per photo | Grounding DINO with the category. Optional SAM mask. | Box or mask |
+| E3 | Embed views | Once per photo | DINOv2 or DINOv3 patch features, pooled over the object. Light augmentation. | 2 to 4 vectors per photo |
+| E4 | Calibrate | Once per object | Similarity statistics of its own views and its negatives. | Threshold and margin |
+| I1 | Quality gate | Every image | Laplacian blur score. Perceptual-hash duplicate check. | Keep or drop |
+| I2 | Detect candidates | Every kept image | Grounding DINO. The prompt lists all registered categories. | Boxes, scores, labels |
+| I3 | Embed candidates | Every box | DINO patch features pooled in the box. Small boxes use an upscaled crop. | One vector per box |
+| I4 | Match | Every box | Cosine similarity to the object views. Margin over negatives. | Candidate sightings |
+| I5 | Verify (optional) | Borderline sightings | LightGlue keypoints or a vision-language model. | Accept or reject |
+| I6 | Update memory | Accepted sightings | Hysteresis rule. | Last-seen record. All vectors go to the archive. |
+| Q1 | Answer | On request | Table lookup. Fallback: newest-first archive scan. | Time, place, photo, confidence |
+
+
+## Ingestion in the code
+
+This is the order in which the `backend` component calls the other components:
+
+1. `storage.prepare_image` checks the upload and removes metadata.
+2. `db.find_image_by_sha256` finds exact duplicates.
+3. `storage.save_image` writes the file. `db.add_image` adds a row with the status `pending`.
+4. A worker calls `db.claim_next_pending`.
+5. `ai.assess_quality` gives the blur score and the perceptual hash. The worker rejects a blurry or near-duplicate image.
+6. `ai.detect_candidates` finds the boxes.
+7. `ai.embed_regions` makes one vector for each box.
+8. `db.add_regions` and `db.store_region_vectors` save the result. `db.mark_image_done` ends the job.
+
+## Query flow
+
+The user asks about an object. The system follows these steps:
+
+1. Find the object in the gallery.
+2. Read its last-seen record.
+3. If the record is newer than the stale limit (24 hours), return it.
+4. Otherwise, scan the region archive in windows of one hour, newest first. Verify each hit. Return the first verified hit.
+5. If no hit exists, return "not seen".
+
+## Answer content
+
+The answer includes the time, the place (room), the cropped photo, and a confidence value. If the box overlapped a hand, the answer says that the user was holding the object.

@@ -1,0 +1,46 @@
+---
+title: Introduction
+description: What Saarthi is, who uses it, and how to read this documentation.
+group: Overview and history
+order: 1
+---
+
+Saarthi is an episodic memory recall tool. It helps older adults and people with dementia to find lost objects.
+
+A wearable camera takes images of the home. The images go to a local processing hub. The user asks in natural language where an object is. The system answers from the stored images.
+
+## What Saarthi does
+
+- It stores the images from the wearable.
+- It finds the objects in each image.
+- It keeps a vector for each object. A vector is a list of numbers that describes how the object looks.
+- It finds the last place where the object was seen.
+- It shows the answer to the user.
+
+## Who uses Saarthi
+
+| User | Need |
+|------|------|
+| Primary user | An older adult with mild or moderate memory loss. The user forgets where objects are. |
+| Caregiver | A family member or nurse. The caregiver registers objects and checks the system. |
+
+## Main design choices
+
+- **Local processing.** All models run on the home hub. Images do not go to an external service.
+- **Natural language.** The user speaks in short, broken sentences. The system must accept them.
+- **Low mental load.** The interface must not need a smartphone screen from the patient.
+- **Precision first.** A wrong answer can mislead the patient. The system must prefer no answer to a wrong answer.
+
+## How to read this documentation
+
+<Flow steps={[
+  { title: "Overview and history", text: "Read why the project exists and how the design changed." },
+  { title: "Architecture and pipeline", text: "Read how the system finds and recognizes objects." },
+  { title: "Benchmarks and demos", text: "Read the test results and watch the demonstrations." },
+  { title: "Guides and reference", text: "Read how to run the code and how each component works." },
+]} />
+
+<Note title="Newer documents win">
+The project has four source documents. When two documents disagree, this documentation follows the newer document. The page [Project history](/docs/overview/history/) gives the order.
+</Note>
+

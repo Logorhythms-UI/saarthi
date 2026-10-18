@@ -1,0 +1,58 @@
+---
+title: System architecture
+description: The dual-node design with a wearable and a home hub.
+group: Architecture and pipeline
+order: 1
+---
+
+Saarthi has two nodes. They connect over the local wireless network (WLAN).
+
+<Figure src="/media/system-architecture.jpg" alt="System architecture diagram with the wearable, the WLAN, and the processing hub" caption="System architecture from Report 2. Click the image to enlarge it." />
+
+## Node 1: the wearable
+
+A 3D-printed mount holds the wearable. The user can wear it as a necklace or fix it to a walking stick or a cap. A low-power microcontroller (for example an ESP32-S3) runs it.
+
+| Module | Task |
+|--------|------|
+| Camera | Takes images of the surroundings. |
+| Microphone | Records the spoken query. |
+| IMU | Measures motion. The system uses it to find a fall. |
+| Speaker | Plays the answer and the alarm. |
+
+### Image capture rules
+
+- The camera takes 0.5 frames per second. The rate rises when the IMU detects more motion.
+- The wearable drops a new image if it is less than 50% different from the last saved image.
+- The wearable keeps 10 to 20 images in memory (PSRAM). It then sends them to the hub in one burst. This saves power.
+- When the user asks a question, a "flush on wake" interrupt sends the buffered images at once. The hub then has the newest images.
+
+## Node 2: the processing hub
+
+The hub is a stationary device with a wall power supply. The target is a Raspberry Pi 5 with 8 GB of RAM and no GPU. It does the heavy work:
+
+- Speech-to-text (STT) and text-to-speech (TTS).
+- A query analyzer.
+- Detection and embedding models.
+- Image storage, the SQLite database, and the vector index.
+- A local web dashboard for caregivers.
+
+### Memory orchestrator
+
+Several large models can exceed the RAM of the hub. The orchestrator loads one model at a time:
+
+1. Load STT, transcribe, unload.
+2. Load the language model, generate the answer, unload.
+3. Load TTS, speak, unload.
+
+### Cloud fallback
+
+Cloud AI is a fallback only. The system uses it if the local models fail many times in a row, and only with the permission of the user.
+
+## Other functions
+
+- **Scene description.** The user asks, "What is in front of me?" The wearable takes a new image. A local model describes it.
+- **Fall detection.** The IMU detects a fall. The wearable plays an alarm and locks the last 1 to 2 minutes of data. The hub alerts the caregivers.
+- **Habit caching.** A SQLite table stores where objects usually are. The system checks this place first.
+- **Nightly jobs.** Cron jobs compress the daily logs into weekly summaries and then monthly profiles.
+

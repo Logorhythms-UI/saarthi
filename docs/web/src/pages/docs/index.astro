@@ -1,0 +1,5 @@
+---
+import { getNav, docUrl } from "../../lib/docs";
+const { flat } = await getNav();
+return Astro.redirect(docUrl(flat[0].id));
+---

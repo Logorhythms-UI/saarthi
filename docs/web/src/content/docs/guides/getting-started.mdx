@@ -1,0 +1,98 @@
+---
+title: Getting started
+description: Set up the project, run the tests, and try the main parts.
+group: Guides and reference
+order: 1
+---
+
+## Requirements
+
+- Python 3.11 (the project pins `3.11.15`).
+- [uv](https://docs.astral.sh/uv/), the package and project manager.
+- Linux is the preferred system. It gave faster CPU inference than Windows in the benchmark.
+
+## Set up
+
+1. Clone the repository.
+2. Run `uv sync` in the project folder.
+3. Install the pre-commit tool: `uv tool install pre-commit`.
+4. Run `pre-commit install`.
+5. Optional: run `pre-commit autoupdate` to use the newest `black` and `ruff`.
+
+On x86, `uv` uses the CPU-only PyTorch wheel. This wheel avoids several GB of CUDA libraries. On a Raspberry Pi (aarch64), the normal wheel is already CPU-only.
+
+## Model downloads
+
+The first run downloads two models from Hugging Face. The `ai/config.toml` file pins each model to a revision.
+
+| Model | Identifier |
+|-------|-----------|
+| Detector | `IDEA-Research/grounding-dino-tiny` |
+| Embedder | `facebook/dinov2-small` |
+
+After the first download, set `local_files_only = true` in `ai/config.toml`. The system then never uses the network.
+
+## Run the tests
+
+```bash
+uv run pytest
+```
+
+This command skips the slow tests. Slow tests load the real models. Run them like this:
+
+```bash
+uv run pytest -m slow
+```
+
+The slow chain test needs a photo. Set the path in the variable `SAARTHI_TEST_IMAGE`. If the variable is not set, the test looks for `test_img.jpg` in the project root.
+
+## Time the ingestion stages
+
+```bash
+uv run python benchmarks/ingestion/benchmark.py PHOTO --runs 3
+```
+
+The tool times each stage of the ingestion pipeline on one photo. The first run is a warm-up. The numbers show which detector passes your hardware can afford.
+
+## Try the upload page
+
+The upload page works with a stub service. Use a short script to open it:
+
+```python
+from nicegui import ui
+from ui.registry import register_pages
+from ui.stub_service import StubUploadService
+
+register_pages(StubUploadService())
+ui.run()
+```
+
+Open `/upload` in a browser. The stub changes its answer with the file name. A name with `duplicate`, `reject`, or `fail` gives that outcome. Other names give `stored`.
+
+
+## Use the ingestion chain in code
+
+The `backend` component connects the components. The test `tests/test_ingestion_chain.py` shows the chain in code. This is the short form:
+
+```python
+import storage.api as storage
+from ai.api import AiEngine
+from db.api import init_db, startup_recovery
+
+storage.init_storage()
+init_db()
+startup_recovery()
+engine = AiEngine()  # Loads the models one time.
+
+prepared = storage.prepare_image(upload_bytes)
+path = storage.save_image(prepared)
+```
+
+## Format and lint
+
+Before you finish a change, run these commands:
+
+```bash
+uv run black .
+uvx ruff check .
+```

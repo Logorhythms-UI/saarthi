@@ -1,0 +1,12 @@
+---
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
+import { Info, TriangleAlert } from "lucide-react";
+interface Props { title?: string; kind?: "note" | "warning" }
+const { title = "Note", kind = "note" } = Astro.props;
+const Icon = kind === "warning" ? TriangleAlert : Info;
+---
+<Alert variant={kind === "warning" ? "destructive" : "default"} class="not-prose my-6">
+  <Icon />
+  <AlertTitle>{title}</AlertTitle>
+  <AlertDescription><slot /></AlertDescription>
+</Alert>

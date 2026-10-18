@@ -1,0 +1,76 @@
+---
+title: Starting parameters
+description: Start values for thresholds, margins, and gates, and where they are set.
+group: Architecture and pipeline
+order: 6
+---
+
+These values are starting points. They come from the papers or from sensible defaults. Tune each value on your own pilot data. Include look-alike objects in the data.
+
+All similarities are cosine values on L2-normalized vectors. Thresholds do not transfer between DINOv2 and DINOv3, or between model sizes. Calibrate again after any backbone change.
+
+## Detection and quality
+
+These values are in `ai/config.toml`.
+
+| Parameter | Start value | Config key |
+|-----------|-------------|------------|
+| Box threshold | 0.25 | `detection.box_threshold` |
+| Text threshold | 0.20 | `detection.text_threshold` |
+| Input short edge | 800 px | `detection.input_short_edge` |
+| Boxes for each phrase | 10 | `detection.max_per_phrase` |
+| Phrases in one pass | 30 | `detection.chunk_size` |
+| NMS IoU | 0.7 | `detection.nms_iou` |
+| Largest box | 60% of the frame | `detection.max_frame_fraction` |
+| Smallest box side | 12 px | `detection.min_box_side` |
+| Hand overlap | 30% | `detection.hand_overlap` |
+| Depiction overlap | 80% | `detection.depiction_inside` |
+| Tile overlap | 20% | `detection.tile_overlap` |
+| Blur limit (image) | 100 | `quality.blur_min` |
+| Duplicate distance | 4 bits | `quality.phash_max_distance` |
+| Smallest crop side | 24 px | `quality.min_crop_side` |
+| Blur limit (crop) | 20 | `quality.crop_blur_min` |
+
+## Embedding
+
+| Parameter | Start value | Config key |
+|-----------|-------------|------------|
+| Frame short edge | 448 px | `embedding.frame_short_edge` |
+| Frame long edge (maximum) | 784 px | `embedding.frame_long_edge_max` |
+| Crop size | 224 px | `embedding.crop_size` |
+| Small-box cutoff | 64 px | `embedding.small_box_min_side` |
+| Crop padding | 15% | `embedding.crop_padding` |
+
+The patch size of DINOv2 is 14 pixels. The frame and crop sizes must be multiples of 14.
+
+## Identity
+
+| Parameter | Start value | Tune by |
+|-----------|-------------|---------|
+| Per-object threshold `tau` | Mean minus half a standard deviation of the object's own view similarities | Precision-recall curve of each object |
+| Strong threshold `tau_strong` | `tau` + 0.05 | Rate of wrong but confident hits |
+| Margin over look-alikes | 0.03 (`MARGIN_MIN`), 0.08 (`MARGIN_STRONG`) | Look-alike rejection on the pilot set |
+| Top-k views | 3 | Precision and recall |
+| Ratio test | 0.9 | Look-alike rejection |
+| LightGlue minimum inliers | 15 | Verified precision on textured objects |
+| Hysteresis | 2 hits in 60 s, or 1 strong verified hit | False record changes per day |
+| Precision target for `p_accept` | 98% | Carer tolerance for wrong answers |
+| Stale after | 24 h | Carer feedback |
+| Views for each object | 5 to 10 photos, up to 40 vectors | Accuracy against number of views |
+
+## Storage and database
+
+| Parameter | Value | Config key |
+|-----------|-------|------------|
+| Largest upload | 15 MiB | `storage/config.toml` `limits.max_bytes` |
+| Largest image | 40 000 000 pixels | `limits.max_pixels` |
+| Minimum free disk space | 1 GiB | `limits.min_free_bytes` |
+| JPEG quality | 95 | `image.jpeg_quality` |
+| Retention | 0 days (keep all) | `retention.days` |
+| Orphan grace time | 3600 s | `cleanup.orphan_grace_seconds` |
+| Vector dimension | 384 | `db/config.toml` `vectors.dimension` |
+| Checkpoint interval | 200 vectors | `vectors.checkpoint_every` |
+
+<Note title="Keep two values equal">
+`limits.max_pixels` in `storage/config.toml` must equal `image.max_pixels` in `ai/config.toml`. `vectors.dimension` in `db/config.toml` must equal the dimension of the embedding model.
+</Note>

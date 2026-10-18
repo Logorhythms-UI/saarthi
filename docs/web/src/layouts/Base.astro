@@ -1,0 +1,64 @@
+---
+import "../styles/global.css";
+import ThemeToggle from "../components/ThemeToggle";
+import { buttonVariants } from "../components/ui/button";
+import { getNav, docUrl } from "../lib/docs";
+import MobileNav from "../components/MobileNav";
+
+interface Props {
+  title: string;
+  description?: string;
+  showMobileNav?: boolean;
+}
+const { title, description = "Saarthi helps people with memory loss to find lost objects.", showMobileNav = false } = Astro.props;
+const { groups, flat } = await getNav();
+const start = flat[0];
+const navGroups = groups.map((g) => ({
+  title: g.title,
+  items: g.docs.map((d) => ({ title: d.data.title, href: docUrl(d.id) })),
+}));
+const path = Astro.url.pathname;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <title>{title}</title>
+    <script is:inline>
+      // Set the theme before the first paint to prevent a flash.
+      try {
+        const saved = localStorage.getItem("theme");
+        const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.classList.toggle("dark", dark);
+      } catch (e) {}
+    </script>
+  </head>
+  <body class="min-h-screen antialiased">
+    <header class="sticky top-0 z-40 border-b bg-background/80 backdrop-blur">
+      <div class="mx-auto flex h-14 max-w-7xl items-center gap-2 px-4">
+        {showMobileNav && <MobileNav client:load groups={navGroups} current={path} />}
+        <a href="/" class="flex items-center gap-2 font-semibold tracking-tight">
+          <span class="grid size-7 place-items-center rounded-md bg-primary text-primary-foreground text-sm">S</span>
+          Saarthi
+        </a>
+        <nav class="ml-6 hidden items-center gap-1 text-sm sm:flex">
+          <a href={docUrl(start.id)} class={buttonVariants({ variant: "ghost", size: "sm" })}>Documentation</a>
+          <a href="/docs/benchmarks/detector-benchmark/" class={buttonVariants({ variant: "ghost", size: "sm" })}>Benchmarks</a>
+          <a href="/docs/guides/getting-started/" class={buttonVariants({ variant: "ghost", size: "sm" })}>Get started</a>
+        </nav>
+        <div class="ml-auto"><ThemeToggle client:load /></div>
+      </div>
+    </header>
+    <slot />
+    <footer class="border-t">
+      <div class="mx-auto max-w-7xl px-4 py-8 text-sm text-muted-foreground">
+        <p>Saarthi: an episodic memory aid for people with dementia. Amrita Vishwa Vidyapeetham, Team 34.</p>
+        <p class="mt-1">All data stays on the local device. This documentation uses ASD-STE100 Simplified Technical English.</p>
+      </div>
+    </footer>
+  </body>
+</html>

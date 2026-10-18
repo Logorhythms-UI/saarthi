@@ -1,0 +1,18 @@
+---
+interface Props { title: string; unit: string; max: number; rows: { label: string; value: number; highlight?: boolean }[] }
+const { title, unit, max, rows } = Astro.props;
+---
+<figure class="not-prose my-6 rounded-lg border p-4">
+  <figcaption class="mb-3 text-sm font-medium">{title}</figcaption>
+  <div class="space-y-2">
+    {rows.map((r) => (
+      <div class="grid grid-cols-[6.5rem_1fr_4.5rem] items-center gap-3 text-sm">
+        <span class="text-muted-foreground">{r.label}</span>
+        <div class="h-3 rounded-full bg-muted">
+          <div class:list={["h-3 rounded-full", r.highlight ? "bg-primary" : "bg-muted-foreground/50"]} style={`width:${Math.max(1, (r.value / max) * 100)}%`}></div>
+        </div>
+        <span class="text-right tabular-nums">{r.value}{unit}</span>
+      </div>
+    ))}
+  </div>
+</figure>

@@ -1,0 +1,17 @@
+---
+import { getCollection, render } from "astro:content";
+import Docs from "../../layouts/Docs.astro";
+import { mdxComponents } from "../../components/mdx";
+
+export async function getStaticPaths() {
+  const all = await getCollection("docs");
+  return all.map((doc) => ({ params: { slug: doc.id }, props: { doc } }));
+}
+
+const { doc } = Astro.props;
+const { Content, headings } = await render(doc);
+---
+
+<Docs doc={doc} headings={headings}>
+  <Content components={mdxComponents} />
+</Docs>

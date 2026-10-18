@@ -1,0 +1,71 @@
+---
+title: ui and backend
+description: The NiceGUI interface and the backend.
+group: Guides and reference
+order: 7
+---
+
+## ui
+
+The `ui` component holds all UI logic. It uses NiceGUI. It contains no application logic. It shows state and calls the application through `ports.py`. It does not import `backend`, `db`, `ai`, or `storage`.
+
+### Files
+
+| Path | Purpose |
+|------|---------|
+| `ports.py` | The interface to the backend: `UploadService` and `UploadOutcome`. |
+| `stub_service.py` | A fake `UploadService` for UI work. |
+| `models.py` | `UploadItem` and `ItemStatus`. |
+| `settings.py` | Accepted file types and the largest file size. |
+| `upload_session.py` | The upload queue of one browser tab. It has no NiceGUI code. |
+| `theme.py` | Serves the CSS files and adds them to a page. |
+| `registry.py` | `register_pages(service)`. |
+| `pages/` | One file for each page. |
+| `components/` | One file for each component. |
+| `static/css/` | `tokens.css`, `base.css`, and one file for each component. |
+
+### Pages
+
+| Route | Page |
+|-------|------|
+| `/upload` | Upload pictures one at a time or as a batch. |
+
+### The upload service
+
+```python
+class UploadService(Protocol):
+    async def submit_image(
+        self, filename: str, content_type: str, data: bytes
+    ) -> UploadOutcome: ...
+```
+
+The service does not raise for expected cases. It returns an `UploadOutcome` with one of these statuses:
+
+| Status | Meaning |
+|--------|---------|
+| `stored` | The service accepted the file. |
+| `duplicate` | The service already has this image. |
+| `rejected` | The file cannot be used (type, size, or content). |
+| `failed` | An error occurred. The user can try again. |
+
+The message in an outcome must not contain personal data or internal error text.
+
+### Limits
+
+The page accepts `image/jpeg`, `image/png`, and `image/webp`. The largest file is 15 MiB. The browser checks these limits for a quick answer only. The backend must check every upload again.
+
+### Colors
+
+Only `static/css/tokens.css` can contain color values. A test enforces this rule. The CSS files load from the local server, so the page does not need the internet.
+
+## backend
+
+The `backend` component is the one place that connects the other components. The UI uses only the backend.
+The backend does these tasks:
+
+- Create the `AiEngine` one time at start-up.
+- Call `storage` and `db` through their `api.py` files.
+- Run the ingestion worker.
+- Run retention and orphan cleanup.
+- Write the start-up recovery report to the log.
+- Give the UI an `UploadService`.

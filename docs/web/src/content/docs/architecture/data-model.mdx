@@ -1,0 +1,73 @@
+---
+title: Data model
+description: The stores of the design and the tables that exist in the code.
+group: Architecture and pipeline
+order: 5
+---
+
+Four stores cover all data. The gallery and the last-seen table are small. They live in a normal database. The region archive is the only large store, and it has a vector index.
+
+## Stores in the design
+
+| Store | One row for each | Key fields | Backend |
+|-------|------------------|------------|---------|
+| Object gallery | Registered object | id, name, category words, view vectors, negative vectors, tau, tau_strong | SQLite and an in-memory matrix |
+| Last-seen table | Registered object | object_id, timestamp, image_id, box, crop, room, sim, margin, verified, in_hand | SQLite |
+| Sighting log | Accepted sighting | object_id, timestamp, image_id, box, sim, margin, verified | SQLite. Prune by age. |
+| Region archive | Detected box | vector, timestamp, image_id, box, phrase, room | FAISS and SQLite |
+
+### Notes
+
+- A DINOv3 ViT-B vector has 768 floats. That is about 1.5 KB at float16.
+- Keep full frames only as long as the carers need them. The crop in the last-seen record is what the patient sees.
+
+## Tables in the code
+
+The code has two tables. They hold the region archive.
+
+### `image`
+
+One row for each uploaded image. The file on disk has no metadata.
+
+| Column | Meaning |
+|--------|---------|
+| `file_path` | Path relative to the storage root. Unique. |
+| `sha256` | Hash of the stripped file. It rejects exact duplicates. Unique. |
+| `phash` | Perceptual hash for near-duplicate checks. Empty until computed. |
+| `width`, `height` | Image size in pixels. Greater than 0. |
+| `captured_at` | Time when the server received the image. UTC. |
+| `room` | Room label. Optional. |
+| `blur_score` | Laplacian variance. Empty until computed. |
+| `status` | `pending`, `processing`, `done`, `rejected`, or `failed`. |
+| `status_detail` | Reject reason or error text. It must not contain image content or personal data. |
+| `processed_at` | Time when processing ended. |
+
+### `region`
+
+One row for each detected box. `Region.id` is also the vector id in the FAISS index.
+
+| Column | Meaning |
+|--------|---------|
+| `image` | Foreign key to `image`. Deletes cascade. |
+| `x0`, `y0`, `x1`, `y1` | Box in pixels. |
+| `det_score` | Detector score. For analysis only. |
+| `source` | `full`, `tile`, or `generic`. |
+| `phrases` | List of detector labels after merging. |
+| `in_hand` | True if a hand covers the object. |
+| `quality_ok` | False if the crop failed the size, blur, or edge gate. |
+| `embedding_model` | Model that made the vector. Empty means the vector is not in FAISS yet. |
+
+## Image status flow
+
+<Flow steps={[
+  { title: "pending", text: "The file is on disk. Analysis has not started." },
+  { title: "processing", text: "A worker analyses the image." },
+  { title: "done", text: "Regions and vectors are written." },
+  { title: "rejected or failed", text: "A quality gate dropped the image, or an error occurred." },
+]} />
+
+A helper that changes the status works only from the correct status. Otherwise it raises `InvalidStateError`.
+
+## The consistency rule
+
+Every region of a `done` image must have a vector. If a region has no vector, the start-up recovery sets its image back to `pending`.
