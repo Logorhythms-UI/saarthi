@@ -1,0 +1,39 @@
+---
+title: Project status
+description: How each part of the design maps to the components of the repository.
+group: Overview and history
+order: 4
+---
+
+This page maps the design to the code. The repository branch is `release-primus`.
+
+## Component overview
+
+| Part | Component | Content |
+|------|-----------|---------|
+| Candidate detection | `ai/` | Grounding DINO Tiny, with prompt chunks, tiling, and a generic pass. |
+| Region embedding | `ai/` | DINOv2-small. It pools the patch vectors inside each box. |
+| Quality gates | `ai/` | Blur score, perceptual hash, crop quality, depiction filter, hand flag. |
+| Image files | `storage/` | Safe image files. It removes all metadata. |
+| Metadata and vectors | `db/` | SQLite tables (`image`, `region`) and a FAISS vector index. It has start-up recovery. |
+| Upload interface | `ui/` | An upload page that works through a service interface. |
+| Orchestration | `backend/` | The only interface that the UI uses. It connects all components. |
+| Measurement | `benchmarks/` | Ingestion timing, detector benchmark, and calibration tools. |
+| Tests | `tests/` | Unit tests for all components. Slow tests use the real models. |
+
+## Design stages and where they run
+
+| Stage | Source of the design | Component |
+|-------|----------------------|-----------|
+| Object enrollment (E1 to E4) | DINO pipeline | `backend/` with `ai/` and `db/` |
+| Quality gate, detection, embedding (I1 to I3) | DINO pipeline | `ai/` |
+| Identity matching and the calibrated decision (I4, I5) | DINO pipeline | `backend/` with `ai/` |
+| Last-seen table and sighting log (I6) | DINO pipeline | `db/` |
+| Query normalization | Benchmark paper | `ai/` |
+| Speech input and output | Report 1 and Report 2 | Hub |
+| Fall detection and caregiver dashboard | Report 1 and Report 2 | Wearable and hub |
+| Raspberry Pi 5 target | Benchmark paper | Hub |
+
+## Differences between files
+
+Some files in the repository describe an earlier design. See [Known differences](/docs/reference/known-differences/).

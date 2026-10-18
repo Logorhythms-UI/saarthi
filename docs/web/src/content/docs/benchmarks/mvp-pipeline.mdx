@@ -1,0 +1,76 @@
+---
+title: MVP pipeline
+description: The first working retrieval pipeline and its known weakness.
+group: Benchmarks and demos
+order: 3
+---
+
+The team built a minimum viable product (MVP) after the benchmark. It shows the core use: the user asks about a lost object, and the system searches the image memory.
+
+## Two pipelines
+
+<Flow steps={[
+  { title: "Upload image", text: "The user uploads an image. It simulates a frame from the wearable." },
+  { title: "Store image", text: "The system saves the image. It never changes the original." },
+  { title: "Store metadata", text: "The system records a time and a sequence number." },
+  { title: "Episodic memory", text: "The image is now part of the memory." },
+]} />
+
+<Flow steps={[
+  { title: "User query", text: "A natural-language question." },
+  { title: "Normalize", text: "Llama 3.2 1B (Q4_K_M GGUF) extracts the visual object." },
+  { title: "Detect", text: "Grounding DINO Tiny searches the images, newest first." },
+  { title: "Result", text: "The first matching image, with a box around the object." },
+]} />
+
+## Query normalization
+
+Users speak in long sentences. For example: "I have a white bottle with black dots on it, I am unable to find it!" A detector needs a short description. A quantized language model removes the extra words. It keeps color, pattern, and object type.
+
+The generation uses a near-zero temperature and a small token limit. The output is checked before use. If the check fails, the system returns an error. It does not continue with bad input.
+
+## Search algorithm
+
+```text
+q = normalize(raw_query)
+for image in images ordered newest first:
+    detections = detect(image, q)
+    if detections and best_score(detections) >= threshold:
+        return result(image, best_score, best_box)
+return NOT_FOUND
+```
+
+## Known weakness
+
+The search uses the idea that the most recent observation is the most relevant. This idea is also its weakness. A false positive stops the search before it reaches the older, correct image.
+
+The newer [recall pipeline](/docs/architecture/pipeline/) fixes this with identity matching, margins, and a repeat rule.
+
+## Architecture of the prototype
+
+<Figure src="/media/prototype-pipeline.jpg" alt="Ingestion pipeline and retrieval pipeline of the September prototype" caption="The September prototype. Ingestion uses YOLO, SigLIP2, and DINOv2. Retrieval adds Grounding DINO Tiny and a score." />
+
+The September prototype had a richer design than the first MVP. It ingested images with YOLO. It saved SigLIP2 (semantic) and DINOv2 (visual) vectors in two FAISS indexes. At query time, it fetched the top candidates, verified them with Grounding DINO Tiny, and ranked them with this score:
+
+```text
+final_score = 0.40 * semantic + 0.25 * visual + 0.35 * grounding
+```
+
+If the best score was below the threshold, the system returned `NOT_FOUND`.
+
+## Timing
+
+The prototype ran on a CPU. A query took about 10 seconds on Linux and about 22 seconds on Windows. The target hardware is the Raspberry Pi 5.
+
+## Module status in the prototype
+
+| Module | State |
+|--------|-------|
+| NiceGUI upload page (`/upload`) | Working |
+| NiceGUI search page (`/search`) | Working |
+| Llama 3.2 1B with `llama_cpp` | Working |
+| Grounding DINO Tiny | Working |
+| SQLite with Peewee | Working |
+| Raspberry Pi | CPU inference verified |
+
+In the MVP, queries are text.

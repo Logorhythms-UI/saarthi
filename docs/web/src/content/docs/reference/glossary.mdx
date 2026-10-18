@@ -1,0 +1,43 @@
+---
+title: Glossary
+description: Terms that this documentation uses.
+group: Guides and reference
+order: 9
+---
+
+This documentation uses one word for one meaning.
+
+| Term | Meaning |
+|------|---------|
+| Archive | The store of all detected regions with their vectors. |
+| Blur score | The variance of the Laplacian of an image. A low value means a blurry image. |
+| Calibration | The process that sets the thresholds of an object from pilot data. |
+| Candidate | A box that might show a registered object. |
+| Carer | A person who registers objects and checks the system. |
+| Cosine similarity | A number between -1 and 1 that shows how close two vectors point. |
+| Depiction | A picture of an object, not the object. For example, an object on a TV screen. |
+| Detector | A model that finds boxes in an image. |
+| DINO | Grounding DINO in this documentation, an open-set detector. |
+| DINOv2, DINOv3 | Feature models that make vectors from images. |
+| Embedder | A model that turns an image or a box into a vector. |
+| Enrollment | The step where a carer registers an object with reference photos. |
+| FAISS | A library for vector search. |
+| Gallery | The set of registered objects with their view vectors and negatives. |
+| Hysteresis | A rule that needs repeated evidence before the record changes. |
+| IMU | Inertial measurement unit. A motion sensor. |
+| In hand | A flag for an object that a hand covers. |
+| Ingestion | The path from a new image to stored regions and vectors. |
+| Last-seen record | The newest confirmed sighting of an object. |
+| Look-alike | A different object that looks like a registered object. |
+| Margin | The difference between the match score and the best look-alike score. |
+| NMS | Non-maximum suppression. It merges overlapping boxes. |
+| Negative | A vector of a look-alike or of the background. The system must not match it. |
+| Open-vocabulary detector | A detector that finds objects from free text. |
+| Perceptual hash (phash) | A short hash that is similar for similar images. |
+| Region | One detected box in an image. |
+| SAM | Segment Anything Model. It makes object masks. |
+| Sighting | A match of a box to a registered object. |
+| STE | ASD-STE100 Simplified Technical English. |
+| Vector | A list of numbers that describes how an object looks. |
+| View | One vector of a registered object. |
+| WLAN | Wireless local area network. |

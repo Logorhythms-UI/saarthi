@@ -1,0 +1,84 @@
+---
+import Base from "../layouts/Base.astro";
+import { buttonVariants } from "../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { Badge } from "../components/ui/badge";
+import { Camera, MessageSquare, ShieldCheck, ScanSearch } from "lucide-react";
+
+const features = [
+  { icon: Camera, title: "A wearable camera", text: "The wearable takes pictures of the home all day. The pictures are the memory of the user." },
+  { icon: MessageSquare, title: "Natural language", text: "The user asks, “Where are my keys?” The system does not need exact words or a screen." },
+  { icon: ScanSearch, title: "Object recall", text: "The system finds the object in the pictures. It shows the most recent place where it saw the object." },
+  { icon: ShieldCheck, title: "Private by design", text: "All models run on the local device. Images and questions do not go to an external service." },
+];
+const steps = [
+  ["Capture", "The wearable sends pictures to the home hub."],
+  ["Index", "The hub finds objects in each picture and saves a vector for each object."],
+  ["Ask", "The user asks where an object is, in natural language."],
+  ["Answer", "The system shows the last place where it saw the object."],
+];
+---
+
+<Base title="Saarthi: episodic memory aid">
+  <main>
+    <section class="mx-auto max-w-4xl px-4 py-20 text-center sm:py-28">
+      <Badge variant="secondary">Edge-first episodic memory aid</Badge>
+      <h1 class="mt-6 text-4xl font-bold tracking-tight sm:text-6xl">Find lost objects. Keep your independence.</h1>
+      <p class="mx-auto mt-6 max-w-2xl text-lg text-muted-foreground">
+        Saarthi helps older adults and people with dementia find objects that they put in the wrong place.
+        Images come from a wearable. The user asks in natural language. The system answers from its memory.
+      </p>
+      <div class="mt-8 flex flex-wrap justify-center gap-3">
+        <a href="/docs/overview/introduction/" class={buttonVariants({ size: "lg" })}>Read the documentation</a>
+        <a href="/docs/guides/getting-started/" class={buttonVariants({ size: "lg", variant: "outline" })}>Get started</a>
+      </div>
+    </section>
+
+    <section class="mx-auto max-w-6xl px-4 pb-16">
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {features.map((f) => (
+          <Card>
+            <CardHeader>
+              <f.icon class="mb-2 size-5 text-muted-foreground" />
+              <CardTitle>{f.title}</CardTitle>
+              <CardDescription>{f.text}</CardDescription>
+            </CardHeader>
+          </Card>
+        ))}
+      </div>
+    </section>
+
+    <section class="border-y bg-muted/40">
+      <div class="mx-auto max-w-6xl px-4 py-16">
+        <h2 class="text-3xl font-bold tracking-tight">How it works</h2>
+        <div class="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {steps.map(([title, text], i) => (
+            <Card size="sm">
+              <CardHeader>
+                <p class="text-xs font-medium text-muted-foreground">Step {i + 1}</p>
+                <CardTitle>{title}</CardTitle>
+              </CardHeader>
+              <CardContent class="text-sm text-muted-foreground">{text}</CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section class="mx-auto max-w-6xl px-4 py-16">
+      <h2 class="text-3xl font-bold tracking-tight">See it work</h2>
+      <p class="mt-2 max-w-2xl text-muted-foreground">This demonstration shows a query for a water bottle. The system found the bottle in the stored images.</p>
+      <video controls preload="none" poster="/media/water-bottle.jpg" class="mt-6 w-full rounded-lg border">
+        <source src="/media/water-bottle.mp4" type="video/mp4" />
+      </video>
+    </section>
+
+    <section class="border-t">
+      <div class="mx-auto max-w-4xl px-4 py-16 text-center">
+        <h2 class="text-3xl font-bold tracking-tight">Learn how Saarthi works</h2>
+        <p class="mt-3 text-muted-foreground">The documentation describes the problem, the design, the benchmarks, and the code.</p>
+        <div class="mt-6"><a href="/docs/overview/introduction/" class={buttonVariants({ size: "lg" })}>Open the documentation</a></div>
+      </div>
+    </section>
+  </main>
+</Base>

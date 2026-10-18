@@ -1,0 +1,59 @@
+---
+title: Benchmark method
+description: How the team built the dataset and measured each model.
+group: Benchmarks and demos
+order: 2
+---
+
+## Dataset
+
+The benchmark uses EgoObjects. This dataset has 114 000 annotated frames from more than 9000 videos by 250 participants. It covers 14 400 object instances in 368 categories. The images are egocentric, indoor, and close to the wearable use case.
+
+The team picked 1000 images by hand. They kept images that show objects that a person with mild or moderate dementia could search for. These are keys, glasses, wallets, bags, bottles, and medicine packages. They removed scenes that nobody would ask about.
+
+The team checked that each image contains a clear target object. The set keeps natural variation in shape, light, sharpness, and object position.
+
+## Labels
+
+A custom benchmark tool assigns one query to each image. The query is the text that a patient could say. The tool uses Python and NiceGUI.
+
+<Figure src="/media/labelling.jpg" alt="The benchmark tool with images and a text field for the object to detect" caption="Phase 1. The tool shows each image. The team writes the object to detect." />
+
+## Run
+
+For each image, the tool sends the image and the query to all four models. It keeps the detection with the highest confidence. It records the confidence and the time. If a model returns nothing, the tool records a failure with confidence 0.
+
+## Manual verification
+
+A person checks each best detection. The team checked 4000 data points (1000 images times four models). Manual checking is necessary. An open-vocabulary detector can return a confident box for the wrong object. The confidence alone cannot show this.
+
+<Figure src="/media/verification-1.jpg" alt="The manual verification screen of the benchmark tool" caption="Manual verification screen." />
+
+<Figure src="/media/verification-2.jpg" alt="A second view of the manual verification screen" caption="A second view of manual verification." />
+
+## Algorithm
+
+```text
+for each image I with query q:
+    for each model M:
+        D = infer(M, I, q)
+        if D is not empty:
+            d* = detection in D with the highest score
+            c  = verify(I, d*, q)      # manual check
+            record score(d*), c, time
+        else:
+            record failure, confidence = 0
+for each model M:
+    compute accuracy, mean confidence, mean time
+```
+
+## Metrics
+
+| Metric | Meaning |
+|--------|---------|
+| Accuracy | Share of images where the best detection is correct. |
+| Confidence | The score of the best detection. |
+| Inference time | Wall-clock time in seconds. |
+| Correct, false positive, missed | Counts of each outcome. |
+
+The raw results are in `benchmarks/object-detection/results/`.

@@ -1,0 +1,98 @@
+---
+import Base from "./Base.astro";
+import { getNav, docUrl, type Doc } from "../lib/docs";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "../components/ui/breadcrumb";
+import { Badge } from "../components/ui/badge";
+import { ChevronLeft, ChevronRight } from "lucide-react";
+
+interface Props {
+  doc: Doc;
+  headings: { depth: number; slug: string; text: string }[];
+}
+const { doc, headings } = Astro.props;
+const { groups, flat } = await getNav();
+const index = flat.findIndex((d) => d.id === doc.id);
+const prev = index > 0 ? flat[index - 1] : undefined;
+const next = index < flat.length - 1 ? flat[index + 1] : undefined;
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
+---
+
+<Base title={`${doc.data.title} | Saarthi docs`} description={doc.data.description} showMobileNav>
+  <div class="mx-auto grid max-w-7xl gap-8 px-4 lg:grid-cols-[16rem_minmax(0,1fr)] xl:grid-cols-[16rem_minmax(0,1fr)_14rem]">
+    <aside class="hidden lg:block">
+      <nav class="sticky top-14 max-h-[calc(100vh-3.5rem)] overflow-y-auto py-8 pr-2" aria-label="Documentation">
+        {groups.map((g) => (
+          <div class="mb-6">
+            <p class="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{g.title}</p>
+            {g.docs.map((d) => (
+              <a
+                href={docUrl(d.id)}
+                aria-current={d.id === doc.id ? "page" : undefined}
+                class:list={[
+                  "block rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-accent",
+                  d.id === doc.id ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground",
+                ]}
+              >
+                {d.data.title}
+              </a>
+            ))}
+          </div>
+        ))}
+      </nav>
+    </aside>
+
+    <main class="min-w-0 py-8">
+      <Breadcrumb>
+        <BreadcrumbList>
+          <BreadcrumbItem><BreadcrumbLink href="/">Home</BreadcrumbLink></BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem><span>{doc.data.group}</span></BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem><BreadcrumbPage>{doc.data.title}</BreadcrumbPage></BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
+      <div class="mt-6 mb-8">
+        <Badge variant="secondary">{doc.data.group}</Badge>
+        <h1 class="mt-3 text-4xl font-bold tracking-tight">{doc.data.title}</h1>
+        <p class="mt-2 text-lg text-muted-foreground">{doc.data.description}</p>
+      </div>
+      <article class="prose prose-neutral dark:prose-invert">
+        <slot />
+      </article>
+      <nav class="mt-12 grid gap-3 border-t pt-6 sm:grid-cols-2" aria-label="Previous and next page">
+        {prev ? (
+          <a href={docUrl(prev.id)} class="rounded-lg border p-4 transition-colors hover:bg-accent">
+            <span class="flex items-center gap-1 text-xs text-muted-foreground"><ChevronLeft size={14} />Previous</span>
+            <span class="font-medium">{prev.data.title}</span>
+          </a>
+        ) : <span />}
+        {next && (
+          <a href={docUrl(next.id)} class="rounded-lg border p-4 text-right transition-colors hover:bg-accent">
+            <span class="flex items-center justify-end gap-1 text-xs text-muted-foreground">Next<ChevronRight size={14} /></span>
+            <span class="font-medium">{next.data.title}</span>
+          </a>
+        )}
+      </nav>
+    </main>
+
+    <aside class="hidden xl:block">
+      <nav class="sticky top-14 py-8 text-sm" aria-label="On this page">
+        <p class="mb-2 font-medium">On this page</p>
+        <ul class="space-y-1.5 border-l">
+          {toc.map((h) => (
+            <li>
+              <a href={`#${h.slug}`} class:list={["block text-muted-foreground hover:text-foreground", h.depth === 3 ? "pl-6" : "pl-3"]}>{h.text}</a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    </aside>
+  </div>
+</Base>

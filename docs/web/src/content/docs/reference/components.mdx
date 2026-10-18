@@ -1,0 +1,49 @@
+---
+title: Components
+description: The folders of the repository and the task of each one.
+group: Guides and reference
+order: 3
+---
+
+Each component has its own folder. Each component does one task. The components form a chain.
+
+| Folder | Task |
+|--------|------|
+| `ai/` | Load models and run inference. It makes vectors. It does not store them. |
+| `storage/` | Keep image files on disk. Remove all metadata. Keep paths safe. |
+| `db/` | Keep all stored data: SQLite metadata and the FAISS vector index. |
+| `backend/` | Connect all backend components. The only interface for the UI. |
+| `ui/` | All UI logic, with NiceGUI. |
+| `utils/` | Small shared helpers. |
+| `benchmarks/` | Benchmark and calibration scripts. Not part of the runtime. |
+| `docs/` | Documentation. This website is in `docs/web/`. |
+| `tests/` | Tests, with `pytest`. |
+
+## Pattern of a component
+
+A component has these files:
+
+- `config.toml` for its settings.
+- `settings.py` with typed, checked settings.
+- `errors.py` with its error classes.
+- `api.py`. This is the only door for other components.
+
+## Dependency rules
+
+<Flow steps={[
+  { title: "ui", text: "Calls backend only." },
+  { title: "backend", text: "Calls the api.py file of ai, storage, and db." },
+  { title: "ai, storage, db", text: "Do not call each other." },
+]} />
+
+- `db` does not read or write image files. `storage` does that.
+- `db` does not make embeddings. `ai` does that.
+- `storage` does not know the database. `backend` gives it the paths.
+- `storage` does not look at what is in an image. `ai` does that.
+
+## Next pages
+
+- [ai](/docs/reference/ai/)
+- [db](/docs/reference/db/)
+- [storage](/docs/reference/storage/)
+- [ui and backend](/docs/reference/ui/)

@@ -1,0 +1,81 @@
+---
+title: Detecting candidates
+description: Stage I2 in detail - prompts, tiling, thresholds, and post-processing.
+group: Architecture and pipeline
+order: 3
+---
+
+Stage I2 has one job. It returns every box that might show a registered object. Each box carries the phrase that found it. The identity stage decides later.
+
+The stage is tuned for recall. An object that the detector never boxes cannot be found later. A false box costs only a few extra comparisons.
+
+## 1. Build the prompt vocabulary
+
+- Each object adds its category word and one to three synonyms. For example, "bottle" gives "a bottle", "a water bottle", and "a flask".
+- Phrases are shared. The owner's bottle and the spouse's bottle both map to "a bottle".
+- Phrases are lowercase noun phrases. In the Hugging Face Transformers library, pass them as a list.
+- Add "a hand" to every prompt. A hand box is not a candidate. It marks objects that the user holds.
+- Add depiction phrases: a television screen, a computer monitor, a picture frame, a mirror, a poster.
+
+## 2. Fit the text limit
+
+The text encoder of Grounding DINO takes at most 256 tokens. The code counts the tokens of each phrase. It splits the phrases into chunks. The chunk size is 30 phrases by default. Each chunk is one full detector pass.
+
+## 3. Run the detector
+
+- The shortest side of the input is 800 pixels.
+- The box threshold is 0.25. The text threshold is 0.20. Both are lower than the documented examples (0.35 to 0.4 and 0.25 to 0.3). This favors recall.
+- The code keeps the best 10 boxes for each phrase.
+
+## 4. Recover small objects
+
+Keys, rings, pill boxes, and hearing aids can cover only a few dozen pixels. The system has two options:
+
+- **Tiling.** Split the frame into a 2 by 2 grid with 20% overlap. Run the small-object phrases on each tile. Map the boxes back to the frame. This adds four passes.
+- **Zoom on demand.** If a large container box (a table or a shelf) is near the last place of a small item, run the detector again on that region.
+
+Tiling is off by default (`tiling_enabled = false`). The zoom option is part of the design only.
+
+## 5. Catch what the words miss
+
+Some objects do not match their category word. Every few frames, the system can run a generic pass with the phrase "an object". The system then compares these boxes with all registered objects.
+
+## 6. Post-process
+
+The function `select_candidates` in `ai/postprocess.py` does these steps in order:
+
+1. Map each label to the phrases of the vocabulary. A label can be a part of a phrase.
+2. Keep the best boxes of each phrase.
+3. Clip the boxes. Drop boxes that cover more than 60% of the frame or that are shorter than 12 pixels.
+4. Merge duplicate boxes with class-agnostic non-maximum suppression (NMS) at IoU 0.7. Keep the union of the labels.
+5. Drop objects that lie at least 80% inside a depiction box.
+6. Mark an object as `in_hand` if more than 30% of its area is inside a hand box.
+
+The function `apply_crop_quality` then checks each crop. A crop is not good enough if its short side is below 24 pixels, its blur score is below 20, or the image edge cuts the box. Such a candidate can go to the archive. It must never update the last-seen record.
+
+## Output of each candidate
+
+| Field | Example | Used by |
+|-------|---------|---------|
+| `box` | x0, y0, x1, y1 in pixels | Embedding and the answer photo |
+| `phrases` | "a bottle", "a flask" | Identity stage: which objects to compare |
+| `det_score` | 0.31 | Analysis only |
+| `source` | `full`, `tile`, or `generic` | Analysis and tuning |
+| `in_hand` | true | Answer wording |
+| `quality_ok` | true | Memory update gate |
+
+<Note title="Do not use det_score for identity">
+The detector score is metadata. The identity stage must not use it to decide if an object belongs to the owner.
+</Note>
+
+## Compute cost
+
+Each chunk, tile, and generic pass is a full model run. One chunk and a 2 by 2 tiling cost five passes. The original Grounding DINO runs at about 1.1 frames per second on a Jetson Orin NX. On edge hardware, run tiling and generic passes only now and then.
+
+## How to tune the detector
+
+1. Label boxes for each registered object on 200 to 500 pilot frames.
+2. Sweep the threshold from 0.15 to 0.40. Record the recall for each category and the number of boxes per frame.
+3. Pick the lowest threshold that keeps tens of candidates per frame, not hundreds, with recall near 100%.
+4. For a category below the target, add synonyms first. Then enable tiling. Then use the generic pass.
+5. Test again after any model or camera change.

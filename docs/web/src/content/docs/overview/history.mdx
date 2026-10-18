@@ -1,0 +1,75 @@
+---
+title: Project history
+description: How the design changed from the first report to the DINO pipeline.
+group: Overview and history
+order: 3
+---
+
+The project has four source documents. This page lists them in time order. When two documents disagree, the newer document wins.
+
+## Timeline
+
+| # | Document | Date | Main content |
+|---|----------|------|--------------|
+| 1 | Report 1 | 26 August 2026 | The first idea. A dual-node system with many features. |
+| 2 | Report 2 | 26 August 2026 | The same system, with clinician input and a test of newer models. |
+| 3 | Benchmarking Open-Vocabulary Models | 2026 | A test of four detectors on 1000 egocentric images. |
+| 4 | DINO-Based Object Recall Pipeline | Latest | The current pipeline design. |
+
+A team presentation (6 September 2026) shows the prototype that the team built after the benchmark.
+
+## Step 1: Report 1
+
+Report 1 proposes a **dual-node** system. A small wearable has a camera, a microphone, a motion sensor (IMU), and a speaker. A stationary hub runs the heavy models.
+
+The features are:
+
+- Conversational visual memory.
+- On-demand scene description.
+- Fall detection with a caregiver alert.
+- Habit caching in SQLite.
+- A local caregiver dashboard.
+
+The report defines the main answer path as a Visual Retrieval-Augmented Generation (RAG) pipeline. The hub embeds images, searches by text, and asks a quantized multimodal model to write the answer.
+
+## Step 2: Report 2
+
+Report 2 keeps the same system. It adds:
+
+- Clinician interviews (see [Problem and users](/docs/overview/problem/)).
+- A more detailed data flow for each feature.
+- A test of VL-JEPA for embeddings and Gemma models for reasoning.
+- A decision to test models on a workstation first, then to choose the hub hardware.
+
+## Step 3: The benchmark
+
+The team tested four open-vocabulary detectors. Grounding DINO Tiny reached 92.91% accuracy. The other three reached 37% to 45%. The team also built an MVP:
+
+1. A small language model (Llama 3.2 1B) cleans the query.
+2. Grounding DINO searches the images from newest to oldest.
+3. The first match is the answer.
+
+The MVP has a known weakness. One false match stops the search too early. See [Benchmark results](/docs/benchmarks/detector-benchmark/) and [MVP pipeline](/docs/benchmarks/mvp-pipeline/).
+
+## Step 4: The DINO pipeline
+
+The latest document changes the main idea. It splits the work into two jobs:
+
+- **Grounding DINO** finds where candidate objects are.
+- **DINOv2 or DINOv3 embeddings** decide if a candidate is the owner's object.
+
+The system checks each new image against the objects that the owner registered. It updates a last-seen record only after a confident match. A question such as "Where is my bottle?" then becomes a table lookup.
+
+## What the newer document replaces
+
+| Older idea | Newer idea |
+|------------|------------|
+| Search by text embedding (SigLIP2) and then verify. | Detect first, then match the identity with DINO embeddings. |
+| Search every image from newest to oldest at query time. | Update a last-seen table at ingestion time. Scan the archive only as a fallback. |
+| First match above a threshold is the answer. | A calibrated decision with margins over look-alike objects and a repeat rule. |
+| Score = 0.4 semantic + 0.25 visual + 0.35 grounding. | Per-object thresholds, margins, and a logistic model. |
+| Any object that the user names. | Objects that the owner registered with 5 to 10 reference photos. |
+
+<Note title="Open point">
+The DINO pipeline document says that "DINO" means Grounding DINO. It gives this as an assumption. It also notes that the original closed-set DINO detector would change only the detection stage.
+</Note>

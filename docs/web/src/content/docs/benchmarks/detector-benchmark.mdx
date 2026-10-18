@@ -1,0 +1,75 @@
+---
+title: Detector benchmark
+description: Results of the test of four open-vocabulary detectors on 1000 egocentric images.
+group: Benchmarks and demos
+order: 1
+---
+
+The team compared four open-vocabulary object detectors. An open-vocabulary detector finds objects from free text. It does not need a fixed list of classes.
+
+## Models
+
+| Model | Variant | Parameters | Source |
+|-------|---------|-----------|--------|
+| Grounding DINO | Tiny | 0.2 billion | IDEA-Research |
+| OWL-ViT | Base (patch32) | 0.2 billion | Google |
+| YOLO-World | v8s | 13 million | Ultralytics |
+| LLMDet | Tiny | 0.2 billion | ISEE-Laboratory |
+
+All models ran through their standard implementations. The team did not fine-tune them. All inference ran on a CPU (Intel Ultra 9 185H, 32 GB RAM).
+
+## Results
+
+<BarChart title="Accuracy (correct best detection)" unit="%" max={100} rows={[
+  { label: "Grounding DINO", value: 92.91, highlight: true },
+  { label: "LLMDet", value: 44.51 },
+  { label: "OWL-ViT", value: 40.02 },
+  { label: "YOLO-World", value: 37.43 },
+]} />
+
+<BarChart title="Average confidence" unit="" max={100} rows={[
+  { label: "Grounding DINO", value: 62.19, highlight: true },
+  { label: "LLMDet", value: 32.32 },
+  { label: "OWL-ViT", value: 8.58 },
+  { label: "YOLO-World", value: 24.83 },
+]} />
+
+<BarChart title="Average inference time on CPU" unit=" s" max={20} rows={[
+  { label: "Grounding DINO", value: 17.06, highlight: true },
+  { label: "LLMDet", value: 19.42 },
+  { label: "OWL-ViT", value: 1.93 },
+  { label: "YOLO-World", value: 1.36 },
+]} />
+
+| Model | Correct | False positives | Missed |
+|-------|---------|-----------------|--------|
+| Grounding DINO | 931 | 70 | 1 |
+| LLMDet | 446 | 556 | 0 |
+| OWL-ViT | 401 | 18 | 583 |
+| YOLO-World | 375 | 26 | 601 |
+
+## Two kinds of failure
+
+- **Aggressive detectors** (Grounding DINO and LLMDet) almost never miss an object. They return some detection for nearly every query. Grounding DINO is correct in 93.0% of its detections. LLMDet is correct in less than half.
+- **Conservative detectors** (OWL-ViT and YOLO-World) miss about 58% to 60% of the objects. When they detect, they are precise. OWL-ViT is correct in 95.7% of its detections. YOLO-World is correct in 93.5%.
+
+For Saarthi, the aggressive type is better. A missed object means that the system cannot help at all. A later verification stage can catch a false positive. This is why the newer pipeline uses the detector for recall and the embedder for precision.
+
+## Linux against Windows
+
+Two identical laptops ran parts of the benchmark. One used Ubuntu 26.04. The other used Windows 11. The mean time of Grounding DINO was about 10 seconds on Linux and 22 seconds on Windows. This is a difference of 2.2 times. The average of 17.06 s is the combined average of both batches.
+
+Linux is the usual operating system for single-board computers. The result is good news for the Raspberry Pi target.
+
+## Qualitative findings
+
+<Figure src="/media/qualitative-results.jpg" alt="Examples of Grounding DINO detections: descriptive queries, viewpoint change, low light, and two blue objects" caption="Grounding DINO behavior. (a) descriptive and misspelled queries. (b) viewpoint change. (c) low light. (d) two blue objects." />
+
+1. **Descriptive and misspelled queries.** The model found objects for "white disk" and "pink cream". It found a wallet for the query "wallter". People with dementia often describe an object by its look. Speech-to-text can also make spelling errors.
+2. **Viewpoint and distance.** The model found the same remote control in a close-up and in a wide shot.
+3. **Low light.** The model found a phone on a cluttered table and a face mask on the floor in dark images. The other models found nothing.
+4. **Fine detail.** For two blue items, a yoga mat and a cloth, the query "blue cloth" found the cloth.
+
+## Decision
+
+The team chose Grounding DINO Tiny. The high accuracy and the near-zero miss rate outweigh the slower speed. The system limits the cost on edge hardware with faster variants and periodic passes.

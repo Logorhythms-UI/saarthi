@@ -1,0 +1,24 @@
+---
+title: Known differences
+description: Places where the source documents and files describe different designs.
+group: Guides and reference
+order: 8
+---
+
+The design changed during the project. Some files describe an earlier step. The newer source wins in this documentation. This page lists the differences.
+
+| Item | Older statement | Current design |
+|------|-----------------|----------------|
+| `ai/README.md` | Lists `BroadDetector` (YOLOv8n), `SemanticEmbedder` (SigLIP2), `VisualEmbedder` (DINOv2-small), `ObjectDetector`, and `QueryNormalizer` (Llama 3.2 1B). | `CandidateDetector` (Grounding DINO Tiny) and `RegionEmbedder` (DINOv2-small). |
+| Where models load | `ai/README.md`: in `Backend.__init__`. | `AiEngine` loads both models one time. The backend creates it. |
+| Retrieval method | Report 1, Report 2, and the September prototype: search by text embedding. | The DINO pipeline: detection, then identity matching with DINO embeddings. |
+| Search order | Benchmark paper: newest image first, first match wins. | Last-seen table, with a newest-first archive scan as the fallback. |
+| Detector size | The DINO pipeline code sketch: `grounding-dino-base`. | `grounding-dino-tiny`, set in `ai/config.toml`. |
+| Embedder | The DINO pipeline: DINOv2 or DINOv3. | DINOv2-small with 384-dimension vectors. |
+| Query normalizer | Benchmark paper: Llama 3.2 1B. | Query step of the design. It is separate from the `ai/` detector and embedder. |
+| Pages of the UI | The September prototype: `/upload`, `/search`, and `/images`. | `/upload`, through the `UploadService` interface. |
+| Design documents | `db/README.md` and `storage/README.md` name design files in `docs/db/` and `docs/storage/`. | These files are not part of this website source. |
+
+<Note title="Rule for conflicts">
+If two sources disagree, follow the newer source.
+</Note>

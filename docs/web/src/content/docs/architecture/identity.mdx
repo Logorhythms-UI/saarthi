@@ -1,0 +1,106 @@
+---
+title: Identity and false positives
+description: How the system decides that an object is the owner's, and how it avoids wrong answers.
+group: Architecture and pipeline
+order: 4
+---
+
+A false positive means that the system tells the patient that an object is in a place where it is not. Precision is the main target. The design stacks cheap filters. Each filter catches what the earlier filters missed.
+
+## Decision logic
+
+A sighting changes the answer only when both of these are true:
+
+1. It is similar enough to the owner's object.
+2. It is clearly closer to the owner's object than to any known look-alike.
+
+Borderline cases go to verification. The record moves only on repeated evidence or on strong verified evidence.
+
+### Baseline rule
+
+```python
+sim    = max(cos(v, u) for u in obj.views)
+margin = sim - max((cos(v, n) for n in obj.negatives), default=0.0)
+if sim >= obj.tau and margin >= MARGIN_MIN:
+    ...  # candidate sighting
+```
+
+All similarities are cosine values on L2-normalized vectors.
+
+### Three rules for reliability
+
+- **Margin over look-alikes.** This stops the identical bottle of a spouse from overwriting the record.
+- **Hysteresis.** The record changes after two hits in a short window or after one strong verified hit. This stops a single false positive.
+- **Capped view expansion.** The gallery learns how the object looks in this home. It learns only from high-confidence sightings. Errors do not add up.
+
+## Where false positives come from
+
+| Source | Example | Filter |
+|--------|---------|--------|
+| Same-category look-alike | The identical bottle of a spouse | 6, 8, 9, 11, 13 |
+| Background bleed | Reference photos taken on the kitchen counter | 3, 4, 5 |
+| Detector mislabel | A vase boxed as "a bottle" | 7 |
+| Depiction | A bottle in a TV advertisement, a picture, or a mirror | 1 |
+| Degraded crop | A blurred, tiny, or hidden object that matches by color | 2 |
+| Lucky view match | One odd reference view that matches unrelated items | 6 |
+| Single-frame fluke | One stray match that overwrites a correct record | 12 |
+
+## The 13 filters
+
+### Detection
+
+1. **Exclude depictions.** Drop candidates that lie at least 80% inside a screen, a monitor, a picture frame, a mirror, or a poster.
+2. **Crop quality gate.** Require a minimum crop size (24 pixels on the short side), a crop blur score above the threshold, and a box that the image edge does not cut. A failed candidate can go to the archive. It can never update the last-seen record.
+
+### Enrollment and embedding
+
+3. **Foreground-only pooling.** Pool DINO features over object pixels only. Use a SAM mask or an object-centric attention map. Box pooling lets the counter, table, or hand dominate small objects.
+4. **Background-free enrollment.** Cut the object out of each reference photo. Embed it on a plain or random background as extra views. The gallery then does not encode the place of the photo.
+5. **Context negatives.** For each reference photo, embed the scene with the object masked out. Store it as a negative. Reject a candidate that is closer to the background than to the object.
+6. **Top-k view score.** Use the mean of the top 3 view similarities. Use the top 1 only while the object has fewer than 5 views. A maximum over 20 to 40 views rewards lucky matches.
+
+### Matching
+
+7. **Category check.** Score each crop with a CLIP or SigLIP zero-shot classifier. Compare the enrolled category with a few similar categories (bottle, vase, jar, cup). Reject the crop if the enrolled category is not the top label.
+8. **Ratio test.** Compare the best score for the object with the best score for anything else. Require `best_other / best_mine` below about 0.9.
+9. **One-to-one assignment.** If the owner's bottle and the spouse's bottle are both registered, solve a Hungarian assignment over the box-to-object score matrix. Each box goes to at most one object.
+10. **Home-specific centering.** Subtract the mean region embedding of the home archive. Normalize again. Optional: use PCA whitening. This reduces "hub" vectors that look similar to everything. Treat this as an experiment.
+
+### Verification
+
+11. **Evidence-based verification.** For textured objects, require a minimum number of LightGlue matches after RANSAC (start near 15). For plain objects, ask a vision-language model about a mark that the carer recorded. For example: "Does this bottle have a blue sticker on the lid?"
+
+### Memory update
+
+12. **Spatial and physical consistency.** Hysteresis hits must agree in place (close box centers, same room), not only in time. If a new sighting is in another room from a record that is only minutes old, and the object is not in hand, require verification.
+
+### Feedback
+
+13. **Learn from corrections.** The answer screen shows the crop. "That is not mine" adds the crop as a negative and starts a new calibration. "Yes" adds the crop as a view (capped). After a few days, show the carer a batch of near-miss crops to label.
+
+## One calibrated decision
+
+The final design replaces the separate threshold checks with a small logistic-regression model. The inputs are the signals above. The output is the probability that a candidate is the owner's object.
+
+```python
+FEATURES = ["topk_sim", "ratio_other", "context_margin", "category_prob",
+            "det_score", "crop_px", "crop_blur", "in_hand", "n_views"]
+
+def decide(cand, obj, model):
+    if cand.inside_depiction or not cand.quality_ok:
+        return "reject"
+    p = model.predict_proba([[cand.f[k] for k in FEATURES]])[0, 1]
+    if p >= obj.p_accept:       # set per object for at least 98% pilot precision
+        return "accept"
+    if p >= obj.p_review and VERIFY_ENABLED:
+        return "verify"         # LightGlue or a vision-language model
+    return "reject"
+```
+
+Pick `p_accept` from the precision-recall curve at a precision target (start at 98%). Do not pick it at the best F1 value. Fit one shared model for all objects, with per-object thresholds, until enough labels exist for more.
+
+## What to measure
+
+- Precision at the chosen operating point, for all sightings and for look-alike negatives separately.
+- Wrong last-seen updates per day in real homes. Estimate them from weekly carer checks of a random sample.
+- Ablations. Turn each technique on and off. Keep only the techniques that raise precision without a large recall cost.

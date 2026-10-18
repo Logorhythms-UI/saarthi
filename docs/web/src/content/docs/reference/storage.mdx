@@ -1,0 +1,84 @@
+---
+title: storage component
+description: Safe image files with no metadata.
+group: Guides and reference
+order: 6
+---
+
+The `storage` component keeps the images from the wearable as files on disk. It removes all metadata before it saves an image.
+
+## Rules
+
+- The component does not control the application flow. `backend` does.
+- `backend` uses `storage/api.py` only.
+- The component does not know the database. `backend` gives it the paths.
+- The component does not look at what is in an image.
+
+## What a stored image is
+
+- Every image is a JPEG (quality 95) in RGB.
+- The camera orientation is applied to the pixels.
+- The file has no metadata: no EXIF, no GPS, no XMP, no ICC profile, no comment.
+- The file name is random. The path has the form `YYYY/MM/DD/<32 hex characters>.jpg`.
+- The path that the module gives out is relative to the storage root.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `api.py` | `init_storage` and the helpers. |
+| `imaging.py` | `prepare_image`: check, orient, remove metadata, encode, hash. It does not touch the disk. |
+| `files.py` | Safe paths, atomic write, read, delete, list, orphan and missing checks. |
+| `settings.py` | Reads `config.toml`. |
+| `errors.py` | Error classes. |
+
+## Configuration
+
+| Key | Meaning |
+|-----|---------|
+| `location.root` | Folder for the files. A relative path starts in `storage/` and must stay inside it. An absolute path is also allowed, for example a mounted SSD. |
+| `limits.max_bytes` | Largest upload, in bytes. |
+| `limits.max_pixels` | Largest image, in pixels. Keep it equal to `image.max_pixels` in `ai/config.toml`. |
+| `limits.min_free_bytes` | The module refuses new images if the disk would have less free space. |
+| `image.jpeg_quality` | Quality of the saved JPEG, 1 to 95. |
+| `retention.days` | Images older than this can be deleted. 0 keeps all images. |
+| `cleanup.orphan_grace_seconds` | A file that the database does not know is an orphan only after this time. |
+
+## Helpers
+
+| Helper | Task |
+|--------|------|
+| `init_storage` | Read the config. Prepare the root folder. Remove stale temporary files. |
+| `prepare_image` | Check an upload. Make the JPEG without metadata. Return the bytes, the SHA-256 hash, the width, and the height. |
+| `save_image` | Write a prepared image to disk. Return the relative path. |
+| `read_image` | Return the bytes of a stored image. |
+| `delete_images` | Delete stored images. Return a report of deleted, missing, and failed paths. |
+| `list_stored_paths` | List all stored paths. |
+| `find_orphan_files` | Find files that the database does not know. |
+| `find_missing_files` | Find database paths that have no file. |
+| `free_space_bytes` | Free space on the disk of the root. |
+
+## Usage
+
+```python
+import storage.api as storage
+
+storage.init_storage()
+prepared = storage.prepare_image(upload_bytes)
+# Ask the database for prepared.sha256. Stop if it is a duplicate.
+path = storage.save_image(prepared)
+# Add path, sha256, width, and height to the database.
+```
+
+## Errors
+
+| Error | Meaning |
+|-------|---------|
+| `StorageError` | Base class. |
+| `StorageConfigError` | `config.toml` is not correct, or `init_storage` was not called. |
+| `UnsupportedImageError` | The data is not JPEG, PNG, or WebP, or it is animated, 16-bit, or damaged. |
+| `ImageTooLargeError` | The image has too many bytes or pixels. |
+| `StorageFullError` | The disk has too little free space. |
+| `StoragePathError` | A path is not a safe storage path. |
+| `StorageNotFoundError` | The file does not exist. |
+| `StorageIOError` | The disk refuses a read, a write, or a delete. |

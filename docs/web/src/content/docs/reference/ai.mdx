@@ -1,0 +1,65 @@
+---
+title: ai component
+description: The detector, the embedder, the quality gates, and the AiEngine interface.
+group: Guides and reference
+order: 4
+---
+
+The `ai` component owns all model loading and inference. Other components use the interface in `ai/api.py`. They do not use the model internals.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `api.py` | `open_image` and the `AiEngine` class. |
+| `detector.py` | `CandidateDetector`. It runs Grounding DINO. |
+| `embedder.py` | `RegionEmbedder`. It runs DINOv2. |
+| `postprocess.py` | Pure functions that clean the detector output. They use no model. |
+| `quality.py` | Blur score, perceptual hash, Hamming distance. |
+| `geometry.py` | Box math: IoU, overlap, NMS, tiles. |
+| `types.py` | `Box`, `Candidate`, `QualityReport`, `RawDetection`. |
+| `settings.py` | Typed settings from `config.toml`. |
+| `runtime.py` | Thread settings and device choice. |
+| `errors.py` | Error classes. |
+
+## Models
+
+| Task | Model | Notes |
+|------|-------|-------|
+| Detection | `IDEA-Research/grounding-dino-tiny` | Pinned to a revision. |
+| Embedding | `facebook/dinov2-small` | 384-dimension vectors. Patch size 14. |
+
+The engine loads both models one time when you create `AiEngine`. The engine never reads the database or the disk.
+
+## AiEngine
+
+| Member | Task |
+|--------|------|
+| `open_image(data)` | Decode bytes into an RGB image. Apply the EXIF orientation. Raise `ImageError` for a bad file or an image with too many pixels. |
+| `assess_quality(image)` | Return a `QualityReport` with the blur score and the perceptual hash. |
+| `is_blurry(report)` | True if the blur score is below `quality.blur_min`. |
+| `is_near_duplicate(phash, recent)` | True if a recent hash is within `phash_max_distance` bits. |
+| `detect_candidates(image, ...)` | Return a list of `Candidate`, best score first. |
+| `embed_regions(image, boxes)` | Return one unit-length `float32` vector for each box. |
+| `embedding_model` | Name for `Region.embedding_model`. For example `dinov2-small@ed25f3a3`. |
+| `embedding_dimension` | Vector length. It must equal `vectors.dimension` in the db settings. |
+
+## Embedding method
+
+`RegionEmbedder.embed` follows these steps:
+
+1. Split the boxes in two groups. A box with a short side below 64 pixels is small. Other boxes are large.
+2. For large boxes, run the model one time on the full frame. Average the patch vectors inside each box.
+3. For small boxes, cut a padded square crop (15% padding). Resize it to 224 pixels. Run the model on the crop. Average all patch vectors.
+4. Normalize each vector to unit length.
+
+## Errors
+
+| Error | Meaning |
+|-------|---------|
+| `AiError` | Base class. |
+| `AiConfigError` | `config.toml` is missing or has a wrong value. |
+| `ModelLoadError` | A model cannot load. |
+| `ImageError` | The image is bad or too large. |
+| `InferenceError` | A model fails while it works on an image. |
+

@@ -1,0 +1,57 @@
+---
+title: Code standards
+description: Rules for code, security, privacy, and documentation.
+group: Guides and reference
+order: 2
+---
+
+## Tiger Style
+
+The project follows [Tiger Style](https://tigerstyle.dev/). Tiger Style is a coding style for Zig. Its main ideas work in Python too.
+
+| Rule | Meaning |
+|------|---------|
+| Type everything | Annotate variables, arguments, and return types. |
+| Assert parameters | Check function parameters at the start of each function. |
+| Handle exceptions | Catch specific exceptions. Do not use a bare `except`. Do not use a silent `pass`. |
+| Simple control flow | Avoid recursion unless it is really needed. |
+| Log well | Use the `logging` module. Do not use `print`. |
+| No wildcard imports | Import each name. |
+| Useful comments | Explain why, not what. |
+| Naming | `snake_case` for functions and variables. `PascalCase` for classes. `UPPER_CASE` for constants. |
+| Commit messages | Write descriptive messages. Future readers use `git blame`. |
+
+## Tools
+
+- **Formatter:** `black`.
+- **Linter:** `ruff` with `--fix`.
+- Both run as `pre-commit` hooks. Ruff also runs in the GitHub Actions workflow on each push and pull request.
+
+## Component rules
+
+- The UI talks to `backend` only.
+- `backend` is the only place that connects components.
+- Components do not use the internals of other components.
+- Tunable constants (thresholds, weights, top-K) live in the `config.toml` of the component.
+- Load AI models one time at start-up. Never load a model in a request handler or a search loop.
+- Each component has a `README.md` that states its purpose.
+
+## Security and privacy
+
+The data is personal and sensitive. It contains images of the home and the daily life of a person.
+
+- Treat all images, embeddings, and queries as private. Do not send them to an external service.
+- Do not log raw image content or personal data.
+- Validate all external input: uploaded files, file paths, and user queries.
+- Prevent path traversal when you write to `storage/`.
+- Use parameterized queries through the ORM. Do not build SQL from strings.
+- Keep secrets in `.env`. Never commit secrets.
+- Download model weights only from the sources that the module README names. Pin dependency versions.
+
+## Documentation
+
+Write all documentation in ASD-STE100 Simplified Technical English. Use short sentences. Use the active voice. Use one word for one meaning.
+
+## Change process
+
+Submit each change as a pull request. The change must pass all code quality checks.
