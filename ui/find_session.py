@@ -1,0 +1,183 @@
+"""State of the find page in one browser tab.
+
+The session keeps the list of objects that a search can find, the result of the
+last search, and a flag that tells the view that a search runs. It has no
+NiceGUI code. The view reads the state and listens for changes.
+"""
+
+import logging
+from collections.abc import Callable
+
+from ui.ports import FindChoice, FindError, FindResult, FindService, FindStatus
+from ui.settings import MAX_QUERY_CHARS
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+MESSAGE_QUERY_REQUIRED: str = "Write what you are looking for, or choose an object."
+MESSAGE_QUERY_TOO_LONG: str = "Please use fewer words."
+MESSAGE_LIST_FAILED: str = "The list of objects could not be loaded."
+MESSAGE_FAILED: str = "The search did not work. Please try again."
+MESSAGE_NOT_HEARD: str = "The computer did not hear you. Please try again."
+
+
+class FindSession:
+    """The objects, the busy flag and the result of the last search of one tab.
+
+    `on_changed` runs after the state changed. `on_notice(text, is_error)` runs
+    when the user must read a short text. A listener error is logged and does
+    not stop the session.
+    """
+
+    def __init__(
+        self,
+        service: FindService,
+        on_changed: Callable[[], None] | None = None,
+        on_notice: Callable[[str, bool], None] | None = None,
+    ) -> None:
+        assert service is not None, "service is required"
+        self._service: FindService = service
+        self._on_changed = on_changed
+        self._on_notice = on_notice
+        self._choices: list[FindChoice] = []
+        self._result: FindResult | None = None
+        self._busy: bool = False
+        self._heard: str | None = None
+        self._choose_words: str | None = None
+
+    @property
+    def choose_words(self) -> str | None:
+        """The words of the last "choose" result, for "Something else". None when no choice is shown."""
+        return self._choose_words
+
+    @property
+    def choices(self) -> list[FindChoice]:
+        """Return a copy of the list of objects that a search can find."""
+        return list(self._choices)
+
+    @property
+    def result(self) -> FindResult | None:
+        """The result of the last search, or None."""
+        return self._result
+
+    @property
+    def busy(self) -> bool:
+        """True while a search runs."""
+        return self._busy
+
+    @property
+    def heard(self) -> str | None:
+        """The words that the computer heard from the last recording, or None."""
+        return self._heard
+
+    async def hear(self, text: str) -> None:
+        """Search with the words of a recording. Empty words give a notice."""
+        assert isinstance(text, str), "text must be a string"
+        words: str = " ".join(text.split())
+        if not words:
+            self._heard = None
+            self._notice(MESSAGE_NOT_HEARD, True)
+            self._notify_changed()
+            return
+        self._heard = words
+        await self.ask(words)
+
+    def voice_failed(self, message: str) -> None:
+        """Show a short text about a problem of the recording."""
+        assert isinstance(message, str) and message, "message is required"
+        self._notice(message, True)
+
+    async def load(self) -> None:
+        """Load the list of objects."""
+        try:
+            self._choices = await self._service.list_choices()
+        except FindError:
+            logger.exception("Cannot load the objects")
+            self._notice(MESSAGE_LIST_FAILED, True)
+            return
+        except Exception:  # The service is outside this module.
+            logger.exception("Cannot load the objects, unexpected error")
+            self._notice(MESSAGE_LIST_FAILED, True)
+            return
+        self._notify_changed()
+
+    async def ask(self, text: str) -> None:
+        """Search with the words of the user."""
+        assert isinstance(text, str), "text must be a string"
+        words: str = " ".join(text.split())
+        if not words:
+            self._notice(MESSAGE_QUERY_REQUIRED, True)
+            return
+        if len(words) > MAX_QUERY_CHARS:
+            self._notice(MESSAGE_QUERY_TOO_LONG, True)
+            return
+        ran: bool = await self._search(lambda: self._service.ask(words))
+        if (
+            ran
+            and self._result is not None
+            and self._result.status == FindStatus.CHOOSE
+        ):
+            # Kept for "Something else": the open search gets the same words.
+            self._choose_words = words
+
+    async def ask_something_else(self) -> None:
+        """Run the open search with the words of the last "choose" result. The user tapped "Something else"."""
+        words: str | None = self._choose_words
+        if (
+            words is None
+            or self._result is None
+            or self._result.status != FindStatus.CHOOSE
+        ):
+            logger.info("No choice is shown. The request is ignored")
+            return
+        await self._search(lambda: self._service.ask_open(words))
+
+    async def pick(self, object_id: int) -> None:
+        """Search for an object that the user chose."""
+        assert isinstance(object_id, int), "object_id must be an int"
+        await self._search(lambda: self._service.find(object_id))
+
+    def clear(self) -> None:
+        """Remove the result."""
+        if self._result is not None:
+            self._result = None
+            self._notify_changed()
+
+    async def _search(self, call: Callable) -> bool:
+        """Run one search. A second request while a search runs is ignored. Return False if it was ignored."""
+        if self._busy:
+            logger.info("A search runs already. The new request is ignored")
+            return False
+        self._busy = True
+        self._result = None
+        self._choose_words = None
+        self._notify_changed()
+        try:
+            self._result = await call()
+        except FindError as error:
+            logger.info("The search was refused: %s", error)
+            self._notice(str(error), True)
+        except (
+            Exception
+        ):  # The service is outside this module. The page must stay usable.
+            logger.exception("The search failed with an unexpected error")
+            self._notice(MESSAGE_FAILED, True)
+        finally:
+            self._busy = False
+            self._notify_changed()
+        return True
+
+    def _notice(self, text: str, is_error: bool) -> None:
+        if self._on_notice is None:
+            return
+        try:
+            self._on_notice(text, is_error)
+        except Exception:  # A view error must not stop the session
+            logger.exception("Listener error for a notice")
+
+    def _notify_changed(self) -> None:
+        if self._on_changed is None:
+            return
+        try:
+            self._on_changed()
+        except Exception:  # A view error must not stop the session
+            logger.exception("Listener error for a change")

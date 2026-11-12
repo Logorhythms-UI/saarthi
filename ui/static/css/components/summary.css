@@ -1,0 +1,14 @@
+/* summary_bar: count of stored files and the clear button. */
+
+.up-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.up-summary__text {
+  margin: 0;
+  font-weight: var(--weight-medium);
+}

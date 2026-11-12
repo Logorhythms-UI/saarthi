@@ -1,200 +1,1034 @@
-import datetime
+"""Public interface of the db component.
+
+`init_db` reads `config.toml`, opens the SQLite database, and creates the tables.
+"""
+
 import logging
-from pathlib import Path
+import tomllib
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path, PurePosixPath
 
-from peewee import fn
+import numpy as np
+from peewee import PeeweeException, SqliteDatabase
 
-from db.schema import ImageHistory, ObjectObservation, db
+from db import (
+    browse,
+    crop_vectors,
+    gallery,
+    reviews,
+    scenes,
+    sightings,
+)
+from db.errors import (
+    ConfigError,
+    DbError,
+    DuplicateImageError,
+    DuplicateObjectError,
+    InvalidRecordError,
+    InvalidStateError,
+    VectorIndexError,
+)
+from db.schema import (
+    EnrolledObject,
+    FrameDescription,
+    FrameScene,
+    Image,
+    ImageStatus,
+    LastSeen,
+    ObjectView,
+    ReferencePhoto,
+    Region,
+    RegionSource,
+    ReviewAnswer,
+    Sighting,
+    database_proxy,
+    utc_now,
+)
+from db.support import translate_errors
+from db.vector_index import VectorIndex
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+# The error classes and the helper modules are part of the public interface of this module.
+__all__ = [
+    "ConfigError",
+    "DbError",
+    "DuplicateImageError",
+    "DuplicateObjectError",
+    "InvalidRecordError",
+    "InvalidStateError",
+    "VectorIndexError",
+    "browse",
+    "crop_vectors",
+    "gallery",
+    "reviews",
+    "scenes",
+    "sightings",
+]
+DB_DIR: Path = Path(__file__).resolve().parent
+DEFAULT_CONFIG_PATH: Path = DB_DIR / "config.toml"
 
-class DatabaseEngine:
-    """Manages image and object-observation metadata persistence using Peewee/SQLite."""
+# Longest `status_detail` text that the database stores.
+MAX_STATUS_DETAIL_LENGTH: int = 500
 
-    def __init__(self) -> None:
-        self._initialize()
-        logger.info("Database initialized and ready")
+_PATH_KEYS: tuple[str, ...] = (
+    "sqlite",
+    "faiss_index",
+    "crop_faiss_index",
+    "key_faiss_index",
+)
+_VECTOR_KEYS: tuple[str, ...] = (
+    "dimension",
+    "checkpoint_every",
+    "crop_dimension",
+    "key_dimension",
+)
+# The newest columns of some tables. A database without them has an older schema.
+_NEW_COLUMNS: dict[str, tuple[str, ...]] = {
+    "region": ("label", "crop_model", "key_model"),
+    "enrolled_object": ("small",),
+}
+# The longest name of a box of the broad detector.
+MAX_LABEL_LENGTH: int = 80
+_SQLITE_PRAGMAS: dict[str, object] = {
+    "foreign_keys": 1,
+    "journal_mode": "wal",
+    "busy_timeout": 5000,
+    "synchronous": "normal",
+}
 
-    def _initialize(self) -> None:
-        """Connect to the database, ensure schema is up to date, then close.
 
-        Closing after init ensures tables are flushed to disk.
-        Peewee's autoconnect (enabled by default) will open fresh
-        connections from any thread that subsequently accesses the DB.
-        """
-        db.connect(reuse_if_open=True)
-        db.create_tables([ImageHistory, ObjectObservation], safe=True)
+@dataclass(frozen=True)
+class NewRegion:
+    """Data for one region to insert. Coordinates are pixels in the image frame."""
 
-        # Migrate: add sequence_number column if missing (existing DB)
-        columns: list[str] = [col.name for col in db.get_columns("imagehistory")]
-        if "sequence_number" not in columns:
-            db.execute_sql(
-                "ALTER TABLE imagehistory ADD COLUMN sequence_number INTEGER DEFAULT 0"
+    x0: int
+    y0: int
+    x1: int
+    y1: int
+    det_score: float
+    source: RegionSource
+    phrases: list[str]
+    in_hand: bool = False
+    quality_ok: bool = True
+    label: str | None = (
+        None  # The name from the broad detector. Only for `source = broad`
+    )
+
+    def __post_init__(self) -> None:
+        assert all(isinstance(v, int) for v in (self.x0, self.y0, self.x1, self.y1))
+        assert 0 <= self.x0 < self.x1, "x1 must be more than x0, and x0 at least 0"
+        assert 0 <= self.y0 < self.y1, "y1 must be more than y0, and y0 at least 0"
+        assert isinstance(self.det_score, float), "det_score must be a float"
+        assert isinstance(self.source, RegionSource), "source must be a RegionSource"
+        assert isinstance(self.phrases, list)
+        assert all(isinstance(phrase, str) for phrase in self.phrases)
+        if self.source == RegionSource.BROAD:
+            assert isinstance(self.label, str) and self.label.strip(), "label needed"
+            assert len(self.label) <= MAX_LABEL_LENGTH, "label is too long"
+        else:
+            assert self.label is None, "only a box of the broad detector has a label"
+
+
+@dataclass(frozen=True)
+class RecoveryReport:
+    """Result of `recover_interrupted`. The backend acts on the FAISS index."""
+
+    # Images that were `processing` and are `pending` again.
+    reset_image_ids: list[int]
+    # Deleted regions that had a vector. They must be removed from the index.
+    stale_vector_ids: list[int]
+    # Regions of `done` images with no vector.
+    unembedded_region_ids: list[int]
+    # Reference photos that were `processing` and are `pending` again.
+    reset_photo_ids: list[int] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class StartupReport:
+    """Result of `startup_recovery`. The backend logs it. No action is needed."""
+
+    # Images that were `processing` and are `pending` again.
+    interrupted_image_ids: list[int]
+    # Done images that had a region with no vector. They are `pending` again.
+    requeued_image_ids: list[int]
+    # Vectors that the index had and the tables did not know. They are removed.
+    orphan_vectors_removed: int
+    # Marks that the tables had and the index did not. They are cleared.
+    missing_vectors_cleared: int
+    # Reference photos that were `processing` and are `pending` again.
+    interrupted_photo_ids: list[int] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DbConfig:
+    """Resolved settings of the db component."""
+
+    sqlite_path: Path
+    faiss_path: Path
+    vector_dimension: int
+    checkpoint_every: int
+    crop_faiss_path: Path
+    crop_vector_dimension: int
+    key_faiss_path: Path
+    key_vector_dimension: int
+
+
+def _resolve_inside_db_dir(key: str, value: object) -> Path:
+    """Turn a relative config path into an absolute path inside the db folder."""
+    if not isinstance(value, str) or not value:
+        raise ConfigError(f"paths.{key} must be a non-empty string")
+    if Path(value).is_absolute():
+        raise ConfigError(f"paths.{key} must be relative to the db folder")
+    resolved: Path = (DB_DIR / value).resolve()
+    if not resolved.is_relative_to(DB_DIR):
+        raise ConfigError(f"paths.{key} must stay inside the db folder")
+    return resolved
+
+
+def _positive_int(table: str, key: str, value: object) -> int:
+    """Return `value` if it is a positive integer. Raise `ConfigError` if not."""
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ConfigError(f"{table}.{key} must be a positive integer")
+    return value
+
+
+def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> DbConfig:
+    """Read and validate the config file."""
+    assert isinstance(config_path, Path), "config_path must be a Path"
+    try:
+        with config_path.open("rb") as file:
+            raw: dict = tomllib.load(file)
+    except FileNotFoundError as error:
+        raise ConfigError(f"Config file not found: {config_path}") from error
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ConfigError(f"Cannot read config {config_path}: {error}") from error
+
+    paths: object = raw.get("paths")
+    if not isinstance(paths, dict):
+        raise ConfigError("Missing [paths] table in config")
+    for key in _PATH_KEYS:
+        if key not in paths:
+            raise ConfigError(f"Missing key paths.{key} in config")
+
+    vectors: object = raw.get("vectors")
+    if not isinstance(vectors, dict):
+        raise ConfigError("Missing [vectors] table in config")
+    for key in _VECTOR_KEYS:
+        if key not in vectors:
+            raise ConfigError(f"Missing key vectors.{key} in config")
+
+    config: DbConfig = DbConfig(
+        sqlite_path=_resolve_inside_db_dir("sqlite", paths["sqlite"]),
+        faiss_path=_resolve_inside_db_dir("faiss_index", paths["faiss_index"]),
+        vector_dimension=_positive_int("vectors", "dimension", vectors["dimension"]),
+        checkpoint_every=_positive_int(
+            "vectors", "checkpoint_every", vectors["checkpoint_every"]
+        ),
+        crop_faiss_path=_resolve_inside_db_dir(
+            "crop_faiss_index", paths["crop_faiss_index"]
+        ),
+        crop_vector_dimension=_positive_int(
+            "vectors", "crop_dimension", vectors["crop_dimension"]
+        ),
+        key_faiss_path=_resolve_inside_db_dir(
+            "key_faiss_index", paths["key_faiss_index"]
+        ),
+        key_vector_dimension=_positive_int(
+            "vectors", "key_dimension", vectors["key_dimension"]
+        ),
+    )
+    files: list[Path] = [
+        config.faiss_path,
+        config.crop_faiss_path,
+        config.key_faiss_path,
+    ]
+    if len(set(files)) != len(files):
+        raise ConfigError("The three FAISS index files must have different paths")
+    logger.info("Loaded config from %s", config_path)
+    return config
+
+
+def close_connection() -> None:
+    """Close the database connection of the current thread, if it is open.
+
+    A thread that uses the database for a long time calls this when it ends.
+    """
+    with _translate_errors("close_connection"):
+        if not database_proxy.is_closed():
+            database_proxy.close()
+
+
+# The open vector index and the config. `init_db` sets them.
+_vector_index: VectorIndex | None = None
+_config: DbConfig | None = None
+
+
+def current_config() -> DbConfig:
+    """Return the config that `init_db` loaded (paths, vector size, checkpoint rule)."""
+    if _config is None:
+        raise DbError("The database is not ready. Call init_db first")
+    return _config
+
+
+def _replace_vector_index(config: DbConfig) -> None:
+    """Open the vector index of the config. Save the old one first, if any."""
+    global _vector_index
+    if _vector_index is not None and _vector_index.unsaved:
+        checkpoint_vectors()
+    try:
+        _vector_index = VectorIndex(
+            config.faiss_path, config.vector_dimension, config.checkpoint_every
+        )
+    except VectorIndexError as error:
+        logger.error("Cannot open the vector index: %s", error)
+        raise
+
+
+def _require_index() -> VectorIndex:
+    """Return the open vector index. Raise if `init_db` was not called."""
+    if _vector_index is None:
+        raise VectorIndexError("The vector index is not open. Call init_db first")
+    return _vector_index
+
+
+def init_db(config_path: Path = DEFAULT_CONFIG_PATH) -> tuple[SqliteDatabase, DbConfig]:
+    """Open the database named in the config and create missing tables.
+
+    Also open the vector index named in the config. Return the database and
+    the resolved config. This function is safe to call more than once.
+    """
+    assert isinstance(config_path, Path), "config_path must be a Path"
+    try:
+        config: DbConfig = load_config(config_path)
+    except ConfigError as error:
+        logger.error("Invalid config: %s", error)
+        raise
+
+    try:
+        config.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+        database: SqliteDatabase = SqliteDatabase(
+            str(config.sqlite_path), pragmas=_SQLITE_PRAGMAS
+        )
+        database_proxy.initialize(database)
+        database.connect(reuse_if_open=True)
+        logger.info("Opened database %s", config.sqlite_path)
+        database.create_tables(
+            [
+                Image,
+                Region,
+                EnrolledObject,
+                ReferencePhoto,
+                ObjectView,
+                Sighting,
+                LastSeen,
+                FrameScene,
+                FrameDescription,
+                ReviewAnswer,
+            ],
+            safe=True,
+        )
+        _check_schema(database)
+    except (OSError, PeeweeException) as error:
+        logger.error(
+            "Cannot open database %s: %s: %s",
+            config.sqlite_path,
+            type(error).__name__,
+            error,
+        )
+        raise
+    logger.info(
+        "Tables ready: image, region, enrolled_object, reference_photo, object_view, "
+        "sighting, last_seen, frame_scene, frame_description, review_answer"
+    )
+    _replace_vector_index(config)
+    crop_vectors.configure(
+        config.crop_faiss_path,
+        config.crop_vector_dimension,
+        config.key_faiss_path,
+        config.key_vector_dimension,
+        config.checkpoint_every,
+    )
+    gallery.configure(config.vector_dimension)
+    global _config
+    _config = config
+    return database, config
+
+
+def _check_schema(database: SqliteDatabase) -> None:
+    """Refuse a database whose tables are older than the code. There is no migration: run `./clear`."""
+    for table, needed in _NEW_COLUMNS.items():
+        columns: set[str] = {column.name for column in database.get_columns(table)}
+        missing: list[str] = [c for c in needed if c not in columns]
+        if missing:
+            logger.error(
+                "The database has an older schema (no column %s.%s)", table, missing[0]
             )
-            logger.info("Migrated: added sequence_number column")
-
-        db.close()
-        logger.info("Database schema ready (connection closed, autoconnect enabled)")
-
-    def finalize(self) -> None:
-        """Close the database connection."""
-        db.close()
-
-    def add_image(self, image_path: str) -> ImageHistory:
-        """Insert a new image record with the next sequence number.
-
-        The file at image_path must exist on disk.
-        Returns the created ImageHistory record.
-        """
-        assert isinstance(image_path, str), "image_path must be a string"
-        assert Path(image_path).exists(), f"Image {image_path} does not exist"
-
-        next_seq: int = self._next_sequence_number()
-        record: ImageHistory = ImageHistory.create(
-            imgpath=image_path, sequence_number=next_seq
-        )
-        logger.info(
-            "Image added to database: %s (sequence: %d)",
-            Path(image_path).name,
-            next_seq,
-        )
-        return record
-
-    def add_object_observation(
-        self,
-        image_id: int,
-        label: str,
-        detector_confidence: float,
-        bounding_box: str,
-        timestamp: datetime.datetime,
-    ) -> int:
-        """Insert an ObjectObservation row and return its integer primary key.
-
-        The primary key is used as the FAISS row ID in the semantic and visual indexes.
-
-        Args:
-            image_id: Primary key of the parent ImageHistory record.
-            label: Broad-detector class label for the object.
-            detector_confidence: Broad-detector confidence score in [0, 1].
-            bounding_box: JSON-serialized [x1, y1, x2, y2] pixel coordinates.
-            timestamp: Copied from the parent ImageHistory record.
-
-        Returns:
-            Integer primary key of the newly created ObjectObservation.
-        """
-        assert (
-            isinstance(image_id, int) and image_id > 0
-        ), "image_id must be a positive int"
-        assert isinstance(label, str) and label, "label must be a non-empty string"
-        assert (
-            0.0 <= detector_confidence <= 1.0
-        ), "detector_confidence must be in [0, 1]"
-        assert (
-            isinstance(bounding_box, str) and bounding_box
-        ), "bounding_box must be a non-empty JSON string"
-        assert isinstance(timestamp, datetime.datetime), "timestamp must be a datetime"
-
-        obs: ObjectObservation = ObjectObservation.create(
-            image_id=image_id,
-            label=label,
-            detector_confidence=detector_confidence,
-            bounding_box=bounding_box,
-            timestamp=timestamp,
-        )
-        return int(obs.id)
-
-    def get_object_observations_by_ids(self, ids: list[int]) -> list[ObjectObservation]:
-        """Batch-fetch ObjectObservation records by primary key list.
-
-        Returns records in an unspecified order. Returns an empty list
-        if ids is empty.
-        """
-        assert isinstance(ids, list), "ids must be a list"
-        if not ids:
-            return []
-        return list(ObjectObservation.select().where(ObjectObservation.id.in_(ids)))
-
-    def get_image_by_id(self, image_id: int) -> ImageHistory | None:
-        """Fetch an ImageHistory record by primary key.
-
-        Returns None if no record exists with that id.
-        """
-        assert (
-            isinstance(image_id, int) and image_id > 0
-        ), "image_id must be a positive int"
-        return ImageHistory.get_or_none(ImageHistory.id == image_id)
-
-    def get_all_images_desc(self) -> list[ImageHistory]:
-        """Return all image records ordered newest-first by sequence number.
-
-        Powers the reverse-chronological search pipeline.
-        """
-        results: list[ImageHistory] = list(
-            ImageHistory.select().order_by(ImageHistory.sequence_number.desc())
-        )
-        logger.info("Retrieved %d images from database (newest first)", len(results))
-        return results
-
-    def get_image_count(self) -> int:
-        """Return the total number of stored image records."""
-        count: int = ImageHistory.select().count()
-        return count
-
-    def get_distinct_object_labels(self) -> list[str]:
-        """Return the distinct broad-detector labels present in the database.
-
-        Diagnostic for ingestion recall: if a user's target object never
-        appears in this list, it can never be retrieved.
-        """
-        rows = ObjectObservation.select(ObjectObservation.label).distinct()
-        return [row.label for row in rows]
-
-    def get_object_observation_count(self) -> int:
-        """Return the total number of ObjectObservation records."""
-        return int(ObjectObservation.select().count())
-
-    def _next_sequence_number(self) -> int:
-        """Compute the next monotonically increasing sequence number."""
-        max_seq = ImageHistory.select(fn.MAX(ImageHistory.sequence_number)).scalar()
-        if max_seq is None:
-            return 1
-        return max_seq + 1
-
-    def delete_image(self, image_id: int) -> list[int]:
-        """Delete an ImageHistory record and its associated ObjectObservations.
-
-        Args:
-            image_id: Primary key of the ImageHistory record.
-
-        Returns:
-            List of ObjectObservation primary keys that were deleted.
-        """
-        assert (
-            isinstance(image_id, int) and image_id > 0
-        ), "image_id must be a positive int"
-
-        # 1. Get the object IDs associated with this image before deletion
-        # so we can pass them to FAISS for removal.
-        obs_ids = [
-            obs.id
-            for obs in ObjectObservation.select(ObjectObservation.id).where(
-                ObjectObservation.image_id == image_id
+            raise DbError(
+                "The database has an older schema than the code. "
+                "Stop the application and run ./clear to start with a new database"
             )
+
+
+_translate_errors = translate_errors  # The old private name stays for the code below
+
+
+def add_image(
+    file_path: str, sha256: str, width: int, height: int, room: str | None = None
+) -> Image:
+    """Insert a new image with the status `pending`.
+
+    `file_path` is relative to the storage root. `captured_at` is the time at
+    which this function runs. Raise `DuplicateImageError` if `file_path` or
+    `sha256` is already in the database.
+    """
+    assert isinstance(file_path, str) and file_path, "file_path must be a string"
+    assert not file_path.startswith(("/", "\\")), "file_path must be relative"
+    assert ".." not in PurePosixPath(file_path).parts, "file_path must not use .."
+    assert isinstance(sha256, str) and len(sha256) == 64, "sha256 must have 64 chars"
+    assert isinstance(width, int) and width > 0, "width must be a positive int"
+    assert isinstance(height, int) and height > 0, "height must be a positive int"
+    assert room is None or isinstance(room, str), "room must be a string or None"
+
+    with _translate_errors("add_image"):
+        image: Image = Image.create(
+            file_path=file_path,
+            sha256=sha256,
+            width=width,
+            height=height,
+            room=room,
+            captured_at=utc_now(),
+        )
+    logger.debug("Added image %d with status pending", image.id)
+    return image
+
+
+def find_image_by_sha256(sha256: str) -> Image | None:
+    """Return the image with this hash, or None. Use it to detect a duplicate upload."""
+    assert isinstance(sha256, str) and len(sha256) == 64, "sha256 must have 64 chars"
+    with _translate_errors("find_image_by_sha256"):
+        return Image.get_or_none(Image.sha256 == sha256)
+
+
+def count_images_by_status(status: ImageStatus) -> int:
+    """Return how many images have this status. Use it to limit the queue of `pending` images."""
+    assert isinstance(status, ImageStatus), "status must be an ImageStatus"
+    with _translate_errors("count_images_by_status"):
+        return Image.select().where(Image.status == status.value).count()
+
+
+def list_recent_phashes(since: datetime | None = None, limit: int = 200) -> list[str]:
+    """Return the perceptual hashes of `done` images, newest first.
+
+    Use it to check for near-duplicate uploads. SQLite cannot compare hashes
+    by Hamming distance, so the caller compares the list. `since` is a naive
+    UTC time. Images from before `since` are left out.
+    """
+    assert since is None or isinstance(since, datetime), "since must be a datetime"
+    assert isinstance(limit, int) and limit > 0, "limit must be positive"
+    with _translate_errors("list_recent_phashes"):
+        query = Image.select(Image.phash).where(
+            Image.status == ImageStatus.DONE.value, Image.phash.is_null(False)
+        )
+        if since is not None:
+            query = query.where(Image.captured_at >= since)
+        query = query.order_by(Image.captured_at.desc(), Image.id.desc()).limit(limit)
+        return [row.phash for row in query]
+
+
+def get_image(image_id: int) -> Image | None:
+    """Return the image with this id, or None."""
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    with _translate_errors("get_image"):
+        return Image.get_or_none(Image.id == image_id)
+
+
+def claim_next_pending() -> Image | None:
+    """Set the oldest `pending` image to `processing` and return it.
+
+    The read and the update run in one write transaction. Two workers cannot
+    get the same image. Return None when no image is `pending`.
+    """
+    with _translate_errors("claim_next_pending"), database_proxy.atomic("IMMEDIATE"):
+        image: Image | None = (
+            Image.select()
+            .where(Image.status == ImageStatus.PENDING.value)
+            .order_by(Image.captured_at, Image.id)
+            .first()
+        )
+        if image is None:
+            return None
+        changed: int = (
+            Image.update(status=ImageStatus.PROCESSING.value)
+            .where(
+                Image.id == image.id,
+                Image.status == ImageStatus.PENDING.value,
+            )
+            .execute()
+        )
+        assert changed == 1, "claim must change exactly one row"
+        image.status = ImageStatus.PROCESSING.value
+    logger.info("Claimed image %d for processing", image.id)
+    return image
+
+
+def _finish_image(image_id: int, status: ImageStatus, detail: str | None) -> Image:
+    """Move an image from `processing` to a final status."""
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    assert detail is None or isinstance(detail, str), "detail must be a string"
+    assert status in (ImageStatus.DONE, ImageStatus.REJECTED, ImageStatus.FAILED)
+
+    cut_detail: str | None = (
+        None if detail is None else detail[:MAX_STATUS_DETAIL_LENGTH]
+    )
+    with _translate_errors(f"mark image {status.value}"):
+        changed: int = (
+            Image.update(
+                status=status.value, status_detail=cut_detail, processed_at=utc_now()
+            )
+            .where(
+                Image.id == image_id,
+                Image.status == ImageStatus.PROCESSING.value,
+            )
+            .execute()
+        )
+        if changed != 1:
+            raise InvalidStateError(
+                f"Image {image_id} does not exist or is not in status processing"
+            )
+        image: Image = Image.get_by_id(image_id)
+    logger.info("Image %d is now %s", image_id, status.value)
+    return image
+
+
+def mark_image_done(image_id: int) -> Image:
+    """Set a `processing` image to `done`."""
+    return _finish_image(image_id, ImageStatus.DONE, None)
+
+
+def mark_image_rejected(image_id: int, reason: str) -> Image:
+    """Set a `processing` image to `rejected`. `reason` must not hold personal data."""
+    assert isinstance(reason, str) and reason, "reason must be a non-empty string"
+    return _finish_image(image_id, ImageStatus.REJECTED, reason)
+
+
+def mark_image_failed(image_id: int, error: str) -> Image:
+    """Set a `processing` image to `failed`. `error` must not hold personal data."""
+    assert isinstance(error, str) and error, "error must be a non-empty string"
+    return _finish_image(image_id, ImageStatus.FAILED, error)
+
+
+def _require_processing(image_id: int) -> None:
+    """Raise `InvalidStateError` unless the image exists and is `processing`."""
+    is_processing: bool = (
+        Image.select()
+        .where(
+            Image.id == image_id,
+            Image.status == ImageStatus.PROCESSING.value,
+        )
+        .exists()
+    )
+    if not is_processing:
+        raise InvalidStateError(
+            f"Image {image_id} does not exist or is not in status processing"
+        )
+
+
+def set_image_analysis(image_id: int, phash: str, blur_score: float) -> Image:
+    """Save the quality-gate values of a `processing` image."""
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    assert isinstance(phash, str) and 0 < len(phash) <= 16, "phash: 1 to 16 chars"
+    assert isinstance(blur_score, float) and blur_score >= 0, "blur_score must be >= 0"
+
+    with _translate_errors("set_image_analysis"):
+        changed: int = (
+            Image.update(phash=phash, blur_score=blur_score)
+            .where(
+                Image.id == image_id,
+                Image.status == ImageStatus.PROCESSING.value,
+            )
+            .execute()
+        )
+        if changed != 1:
+            raise InvalidStateError(
+                f"Image {image_id} does not exist or is not in status processing"
+            )
+        return Image.get_by_id(image_id)
+
+
+def add_regions(image_id: int, regions: list[NewRegion]) -> list[Region]:
+    """Insert the regions of a `processing` image in one transaction.
+
+    Return the new rows, with ids set and `embedding_model` empty. The ids are
+    the vector ids for the FAISS index. An empty list is allowed.
+    """
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    assert isinstance(regions, list), "regions must be a list"
+    assert all(isinstance(region, NewRegion) for region in regions)
+
+    with _translate_errors("add_regions"), database_proxy.atomic():
+        _require_processing(image_id)
+        rows: list[Region] = [
+            Region.create(
+                image=image_id,
+                x0=region.x0,
+                y0=region.y0,
+                x1=region.x1,
+                y1=region.y1,
+                det_score=region.det_score,
+                source=region.source.value,
+                phrases=region.phrases,
+                in_hand=region.in_hand,
+                quality_ok=region.quality_ok,
+                label=region.label.strip() if region.label is not None else None,
+            )
+            for region in regions
+        ]
+    logger.debug("Added %d region(s) to image %d", len(rows), image_id)
+    return rows
+
+
+def get_region(region_id: int) -> Region | None:
+    """Return the region with this id, with its frame in `region.image`, or None."""
+    assert isinstance(region_id, int) and region_id > 0, "region_id must be positive"
+    with _translate_errors("get_region"):
+        return (
+            Region.select(Region, Image)
+            .join(Image)
+            .where(Region.id == region_id)
+            .first()
+        )
+
+
+def get_broad_regions(image_id: int) -> list[Region]:
+    """Return the boxes of the broad detector in an image, the most confident first."""
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    with _translate_errors("get_broad_regions"):
+        return list(
+            Region.select()
+            .where(Region.image == image_id, Region.source == RegionSource.BROAD.value)
+            .order_by(Region.det_score.desc(), Region.id)
+        )
+
+
+def get_regions(image_id: int) -> list[Region]:
+    """Return the regions of an image, ordered by id."""
+    assert isinstance(image_id, int) and image_id > 0, "image_id must be positive"
+    with _translate_errors("get_regions"):
+        return list(Region.select().where(Region.image == image_id).order_by(Region.id))
+
+
+def mark_regions_embedded(region_ids: list[int], embedding_model: str) -> int:
+    """Record that the vectors of these regions are in the FAISS index.
+
+    Call it after the vectors are written. Change all rows or none: if one id
+    does not exist, raise `InvalidStateError` and change nothing.
+    """
+    assert isinstance(region_ids, list) and region_ids, "region_ids must not be empty"
+    assert all(isinstance(i, int) and i > 0 for i in region_ids), "ids must be positive"
+    assert isinstance(embedding_model, str) and embedding_model, "model name needed"
+
+    unique_ids: set[int] = set(region_ids)
+    with _translate_errors("mark_regions_embedded"), database_proxy.atomic():
+        changed: int = (
+            Region.update(embedding_model=embedding_model)
+            .where(Region.id.in_(unique_ids))
+            .execute()
+        )
+        if changed != len(unique_ids):
+            raise InvalidStateError(
+                f"{len(unique_ids) - changed} region id(s) do not exist"
+            )
+    logger.debug("Marked %d region(s) as embedded", changed)
+    return changed
+
+
+def list_embedded_region_ids() -> list[int]:
+    """Return the ids of all regions that have a vector in the FAISS index.
+
+    The backend compares this list with the ids in FAISS to find differences.
+    """
+    with _translate_errors("list_embedded_region_ids"):
+        query = (
+            Region.select(Region.id)
+            .where(Region.embedding_model.is_null(False))
+            .order_by(Region.id)
+        )
+        return [row.id for row in query]
+
+
+def _reset_images_to_pending(image_ids: list[int]) -> list[int]:
+    """Delete the regions of these images and set the images to `pending`.
+
+    Call it inside a transaction. Return the ids of the deleted regions that
+    had a vector. The caller removes them from the vector index.
+    """
+    if not image_ids:
+        return []
+    embedded_ids: list[int] = [
+        row.id
+        for row in Region.select(Region.id)
+        .where(Region.image.in_(image_ids), Region.embedding_model.is_null(False))
+        .order_by(Region.id)
+    ]
+    Region.delete().where(Region.image.in_(image_ids)).execute()
+    Image.update(
+        status=ImageStatus.PENDING.value, status_detail=None, processed_at=None
+    ).where(Image.id.in_(image_ids)).execute()
+    return embedded_ids
+
+
+def recover_interrupted() -> RecoveryReport:
+    """Repair the database after a stop. Call it once at start-up.
+
+    This function changes the database only and leaves the vector index
+    alone. Most callers need `startup_recovery`, which also repairs the index.
+
+    1. Each `processing` image goes back to `pending`.
+    2. The regions of these images are deleted, so the retry cannot make
+       duplicates. The ids of those that had a vector are reported.
+    3. Regions of `done` images with no vector are reported and not changed.
+    """
+    with _translate_errors("recover_interrupted"), database_proxy.atomic("IMMEDIATE"):
+        interrupted: list[int] = [
+            row.id
+            for row in Image.select(Image.id)
+            .where(Image.status == ImageStatus.PROCESSING.value)
+            .order_by(Image.id)
+        ]
+        stale_vector_ids: list[int] = _reset_images_to_pending(interrupted)
+        reset_photos: list[int] = gallery.reset_processing_photos()
+        unembedded: list[int] = [
+            row.id
+            for row in Region.select(Region.id)
+            .join(Image)
+            .where(
+                Image.status == ImageStatus.DONE.value,
+                Region.embedding_model.is_null(),
+            )
+            .order_by(Region.id)
         ]
 
-        # 2. Delete the image (ObjectObservations will be cascade deleted)
-        record = ImageHistory.get_or_none(ImageHistory.id == image_id)
-        if record:
-            record.delete_instance()
-            logger.info(
-                "Deleted image (id=%d) and %d observations", image_id, len(obs_ids)
+    report: RecoveryReport = RecoveryReport(
+        interrupted, stale_vector_ids, unembedded, reset_photos
+    )
+    logger.info(
+        "Recovery: %d image(s) and %d reference photo(s) reset, %d stale vector id(s), "
+        "%d region(s) without vector",
+        len(interrupted),
+        len(reset_photos),
+        len(stale_vector_ids),
+        len(unembedded),
+    )
+    if stale_vector_ids or unembedded:
+        logger.warning(
+            "Recovery needs action by backend: remove %d id(s) from FAISS, "
+            "check %d region(s) without vector",
+            len(stale_vector_ids),
+            len(unembedded),
+        )
+    return report
+
+
+def clear_regions_embedded(region_ids: list[int]) -> int:
+    """Set `embedding_model` to empty for these regions. Unknown ids are ignored.
+
+    Return the number of rows changed.
+    """
+    assert isinstance(region_ids, list), "region_ids must be a list"
+    assert all(isinstance(i, int) and i > 0 for i in region_ids), "ids must be positive"
+    if not region_ids:
+        return 0
+    with _translate_errors("clear_regions_embedded"):
+        return (
+            Region.update(embedding_model=None)
+            .where(Region.id.in_(set(region_ids)))
+            .execute()
+        )
+
+
+def store_region_vectors(
+    region_ids: list[int], vectors: np.ndarray, embedding_model: str
+) -> None:
+    """Add the vectors of regions to the index and mark the regions as embedded.
+
+    Do both steps or none. `vectors` has one float32 row of unit length for
+    each id, in the same order. The index is written to disk when enough
+    changes are unsaved (see `checkpoint_every` in `config.toml`).
+    """
+    assert isinstance(region_ids, list) and region_ids, "region_ids must not be empty"
+    assert isinstance(embedding_model, str) and embedding_model, "model name needed"
+
+    index: VectorIndex = _require_index()
+    index.add(region_ids, vectors)
+    try:
+        mark_regions_embedded(region_ids, embedding_model)
+    except DbError:
+        index.remove(region_ids)  # Keep the index and the tables in step
+        raise
+    logger.debug("Stored %d vector(s)", len(region_ids))
+    index.checkpoint_if_due()
+
+
+def remove_region_vectors(region_ids: list[int]) -> int:
+    """Remove the vectors of regions from the index and clear their marks.
+
+    Ids that are not in the index are ignored. Return how many vectors were
+    removed from the index.
+    """
+    assert isinstance(region_ids, list), "region_ids must be a list"
+    assert all(isinstance(i, int) and i > 0 for i in region_ids), "ids must be positive"
+
+    index: VectorIndex = _require_index()
+    removed: int = index.remove(region_ids)
+    clear_regions_embedded(region_ids)
+    logger.info("Removed %d vector(s) from the index", removed)
+    index.checkpoint_if_due()
+    return removed
+
+
+def checkpoint_vectors() -> None:
+    """Write the vector index to disk now.
+
+    The application calls this when it stops. Raise `VectorIndexError` if the
+    write fails.
+    """
+    _require_index().save()
+    crop_vectors.checkpoint()
+
+
+def vector_count() -> int:
+    """Return the number of vectors in the index."""
+    return _require_index().count
+
+
+# Statuses of images that no worker uses. Only these are old enough to be deleted.
+_FINAL_STATUSES: tuple[str, ...] = (
+    ImageStatus.DONE.value,
+    ImageStatus.REJECTED.value,
+    ImageStatus.FAILED.value,
+)
+
+
+def list_images_older_than(cutoff: datetime, limit: int = 100) -> list[Image]:
+    """Return the oldest images that were captured before `cutoff`.
+
+    Only `done`, `rejected` and `failed` images are listed, so an image that
+    waits for a worker or is in use is never a candidate. `cutoff` is a naive
+    UTC time. The oldest image comes first. An image that a last-seen record
+    uses is never listed: the answer shows a crop of it.
+    """
+    assert isinstance(cutoff, datetime), "cutoff must be a datetime"
+    assert isinstance(limit, int) and limit > 0, "limit must be positive"
+    with _translate_errors("list_images_older_than"):
+        return list(
+            Image.select()
+            .where(
+                Image.status.in_(_FINAL_STATUSES),
+                Image.captured_at < cutoff,
+                Image.id.not_in(LastSeen.select(LastSeen.image)),
             )
+            .order_by(Image.captured_at, Image.id)
+            .limit(limit)
+        )
 
-        return obs_ids
 
-    def clear_all(self) -> None:
-        """Clear all ImageHistory and ObjectObservation records from the database."""
-        ObjectObservation.delete().execute()
-        ImageHistory.delete().execute()
-        logger.info("Database cleared of all image and observation records")
+def list_image_paths() -> list[str]:
+    """Return the `file_path` of every image, sorted. Use it to compare with the files on disk."""
+    with _translate_errors("list_image_paths"):
+        return [
+            row.file_path
+            for row in Image.select(Image.file_path).order_by(Image.file_path)
+        ]
+
+
+def list_all_file_paths() -> list[str]:
+    """Return the `file_path` of every image and every reference photo, sorted.
+
+    The orphan check compares this list with the files on disk. A list of
+    images alone would make the reference photos look like orphans.
+    """
+    return sorted({*list_image_paths(), *gallery.list_photo_paths()})
+
+
+def delete_images(image_ids: list[int]) -> list[str]:
+    """Delete images, their regions and their vectors. Return their `file_path` values.
+
+    The caller deletes the files after this call. The rows go first on
+    purpose: a stop in between leaves files that no row owns (found by
+    `storage.find_orphan_files`), and not rows without a file.
+    Unknown ids are ignored. If one image is `processing`, raise
+    `InvalidStateError` and delete nothing. The same happens for an image that
+    a last-seen record uses.
+    """
+    assert isinstance(image_ids, list), "image_ids must be a list"
+    assert all(isinstance(i, int) and i > 0 for i in image_ids), "ids must be positive"
+    if not image_ids:
+        return []
+
+    index: VectorIndex = _require_index()
+    with _translate_errors("delete_images"), database_proxy.atomic("IMMEDIATE"):
+        images: list[Image] = list(Image.select().where(Image.id.in_(set(image_ids))))
+        busy: list[int] = [
+            i.id for i in images if i.status == ImageStatus.PROCESSING.value
+        ]
+        if busy:
+            raise InvalidStateError(f"Images are in use and cannot be deleted: {busy}")
+        kept: list[int] = [
+            row.image_id
+            for row in LastSeen.select(LastSeen.image).where(
+                LastSeen.image.in_([i.id for i in images])
+            )
+        ]
+        if kept:
+            raise InvalidStateError(
+                f"Images are kept by a last-seen record and cannot be deleted: {kept}"
+            )
+        found_ids: list[int] = [i.id for i in images]
+        vector_ids: list[int] = [
+            row.id
+            for row in Region.select(Region.id).where(
+                Region.image.in_(found_ids), Region.embedding_model.is_null(False)
+            )
+        ]
+        crop_ids: list[int] = [
+            row.id
+            for row in Region.select(Region.id).where(
+                Region.image.in_(found_ids),
+                Region.crop_model.is_null(False) | Region.key_model.is_null(False),
+            )
+        ]
+        paths: list[str] = [i.file_path for i in images]
+        Image.delete().where(Image.id.in_(found_ids)).execute()  # Regions go by cascade
+
+    index.remove(vector_ids)
+    index.checkpoint_if_due()
+    for start in range(0, len(crop_ids), crop_vectors.MAX_IDS):
+        crop_vectors.remove(crop_ids[start : start + crop_vectors.MAX_IDS])
+    logger.info("Deleted %d image(s) and %d vector(s)", len(paths), len(vector_ids))
+    return paths
+
+
+def get_region_vectors(region_ids: list[int]) -> np.ndarray:
+    """Return the stored vectors of these regions, one row for each id, in the same order.
+
+    Raise `VectorIndexError` if a region has no vector in the index.
+    """
+    assert isinstance(region_ids, list), "region_ids must be a list"
+    assert all(isinstance(i, int) and i > 0 for i in region_ids), "ids must be positive"
+    return _require_index().get_vectors(region_ids)
+
+
+def list_searchable_regions(
+    since: datetime, until: datetime, embedding_model: str, limit: int = 5000
+) -> list[Region]:
+    """Return the regions of `done` frames that a search can compare, newest frame first.
+
+    A frame is in the window if `since` < `captured_at` <= `until` (naive UTC
+    times). Only regions with `quality_ok` and a vector of `embedding_model`
+    are listed: vectors of other models cannot be compared. The boxes of the
+    broad detector are not listed: the modes `tau` and `evidence` match the
+    candidates of the detector only. Regions of one
+    frame are next to each other, ordered by id. At most `limit` regions are
+    returned. Each region has its frame in `region.image`.
+    """
+    assert isinstance(since, datetime) and isinstance(until, datetime), "datetimes"
+    assert since <= until, "since must not be after until"
+    assert isinstance(embedding_model, str) and embedding_model, "model name needed"
+    assert isinstance(limit, int) and limit > 0, "limit must be positive"
+    with _translate_errors("list_searchable_regions"):
+        return list(
+            Region.select(Region, Image)
+            .join(Image)
+            .where(
+                Image.status == ImageStatus.DONE.value,
+                Image.captured_at > since,
+                Image.captured_at <= until,
+                Region.quality_ok == 1,
+                Region.embedding_model == embedding_model,
+                Region.source != RegionSource.BROAD.value,
+            )
+            .order_by(Image.captured_at.desc(), Image.id.desc(), Region.id)
+            .limit(limit)
+        )
+
+
+def list_vector_ids() -> list[int]:
+    """Return the region ids that have a vector in the index, sorted."""
+    return sorted(_require_index().ids())
+
+
+def _requeue_images_with_gaps() -> tuple[list[int], list[int]]:
+    """Set `done` images with a region without a vector back to `pending`.
+
+    Return the image ids and the ids of the deleted regions that had a vector.
+    """
+    with (
+        _translate_errors("requeue images with gaps"),
+        database_proxy.atomic("IMMEDIATE"),
+    ):
+        gap_images = Region.select(Region.image).where(Region.embedding_model.is_null())
+        image_ids: list[int] = [
+            row.id
+            for row in Image.select(Image.id)
+            .where(Image.status == ImageStatus.DONE.value, Image.id.in_(gap_images))
+            .order_by(Image.id)
+        ]
+        return image_ids, _reset_images_to_pending(image_ids)
+
+
+def startup_recovery() -> StartupReport:
+    """Repair the tables and the vector index after a stop.
+
+    Call it once after `init_db` and before the workers start. The steps:
+
+    1. Each `processing` image goes back to `pending`. Its regions and
+       vectors are deleted, so the retry cannot make duplicates.
+    2. A vector that has no embedded region in the tables is removed.
+    3. An embedded mark that has no vector in the index is cleared.
+    4. A `done` image that has a region without a vector goes back to
+       `pending`. Its regions and vectors are deleted. The workers process
+       the image again.
+
+    Rule for the caller: every region of a `done` image must have a vector.
+    A region that never gets a vector would send its image back to `pending`
+    at every start.
+    """
+    index: VectorIndex = _require_index()
+
+    interrupted: RecoveryReport = recover_interrupted()
+    index.remove(interrupted.stale_vector_ids)
+
+    marked_ids: set[int] = set(list_embedded_region_ids())
+    vector_ids: set[int] = index.ids()
+    orphan_vectors_removed: int = index.remove(sorted(vector_ids - marked_ids))
+    missing_vectors_cleared: int = clear_regions_embedded(
+        sorted(marked_ids - vector_ids)
+    )
+
+    requeued_image_ids, gap_vector_ids = _requeue_images_with_gaps()
+    index.remove(gap_vector_ids)
+    index.checkpoint_if_due()
+
+    # The crop vectors of the deleted regions are orphans now. The recovery removes them.
+    crop_vectors.recover()
+
+    report: StartupReport = StartupReport(
+        interrupted_image_ids=interrupted.reset_image_ids,
+        interrupted_photo_ids=interrupted.reset_photo_ids,
+        requeued_image_ids=requeued_image_ids,
+        orphan_vectors_removed=orphan_vectors_removed,
+        missing_vectors_cleared=missing_vectors_cleared,
+    )
+    logger.info(
+        "Start-up recovery: %d interrupted image(s), %d requeued image(s), "
+        "%d orphan vector(s) removed, %d missing vector(s) cleared",
+        len(report.interrupted_image_ids),
+        len(report.requeued_image_ids),
+        report.orphan_vectors_removed,
+        report.missing_vectors_cleared,
+    )
+    if requeued_image_ids or orphan_vectors_removed or missing_vectors_cleared:
+        logger.warning("Start-up recovery repaired the tables or the vector index")
+    return report

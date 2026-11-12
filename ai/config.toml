@@ -1,0 +1,311 @@
+# Settings for the ai component.
+# The start values come from docs/guide/DINO-Based Object Recall Pipeline.md.
+# Tune them with the benchmark in benchmarks/ingestion.
+
+[models]
+# Models are pinned to a revision. Change the revision only after a test run.
+detector_id = "IDEA-Research/grounding-dino-tiny"
+detector_revision = "a2bb814dd30d776dcf7e30523b00659f4f141c71"
+embedder_id = "facebook/dinov2-small"
+embedder_revision = "ed25f3a31f01632728cabb09d1542f84ab7b0056"
+# Turns the words of a user into a vector, to find the object that the user means (Apache-2.0).
+query_encoder_id = "sentence-transformers/all-MiniLM-L6-v2"
+query_encoder_revision = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
+# Checks a borderline sighting: it counts the keypoints that match between two pictures (LightGlue with SuperPoint).
+# LICENCE: these weights are for academic or non-profit NON-COMMERCIAL RESEARCH use only. The owner confirmed that
+# this project is for academic research. Change the verifier if the use changes (see docs/backend/Verification.md).
+verifier_id = "ETH-CVG/lightglue_superpoint"
+verifier_revision = "5f5f626efee99f37dbc9eafea879d24d297aeab8"
+# Describes the place of an object: it chooses the best room and the best surface from fixed lists of words (Apache-2.0).
+scene_id = "google/siglip-base-patch16-224"
+scene_revision = "7fd15f0689c79d79e38b1c2e2e2370a7bf2761ed"
+# Turns the speech of the user into text (stage Q0), on the device. English only (Apache-2.0).
+speech_id = "openai/whisper-base"
+speech_revision = "e37978b90ca9030d5170a5c07aadb050351a65bb"
+# A small language model for words (Qwen3.5-0.8B, Apache-2.0). It is a multimodal model, so the same weights can later
+# describe a frame. Now it rewrites a description of an object ("that thing I check my mails on") into object names.
+language_id = "Qwen/Qwen3.5-0.8B"
+language_revision = "2fc06364715b967f1860aea9cf38778875588b17"
+# Finds objects that nobody registered (broad detection). YOLOE, prompt-free: no class list is given. It labels each box
+# from its own list of 4585 names. LICENCE: AGPL-3.0 (Ultralytics). The owner accepted it for this academic project.
+# The weights come from the Ultralytics release below. The file is downloaded one time into ai/models and its SHA-256 is checked.
+open_detector_file = "yoloe-11s-seg-pf.pt"
+open_detector_url = "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-11s-seg-pf.pt"
+open_detector_sha256 = "292bdf157a9ec7315f34b567cb93467c5043cd1889a1cc18abbfdeb88d7a948d"
+# "auto" uses a GPU if one exists, and the CPU if not. Other values: "cpu", "cuda".
+device = "auto"
+# Number of CPU threads for the models. 0 keeps the torch default.
+cpu_threads = 0
+# true: never download. Use it after the first download, on a network without internet.
+local_files_only = false
+
+[image]
+# Largest image that open_image accepts, in pixels (width x height).
+max_pixels = 40000000
+
+[quality]
+# An image with a blur score below this value is blurry. Compared on a copy
+# that is scaled to analysis_max_side. 0 turns the gate off. The owner chose 0 until
+# there are 20 or more real wearable frames to calibrate with (the pipeline start value is 100).
+blur_min = 0.0
+analysis_max_side = 1024
+# Images whose hashes differ by this number of bits or less are near duplicates.
+phash_max_distance = 4
+# A region is not good enough for the identity check if its short side is
+# smaller than min_crop_side pixels, or its blur score is below crop_blur_min.
+min_crop_side = 24
+crop_blur_min = 20.0
+
+[detection]
+box_threshold = 0.25
+text_threshold = 0.20
+# Shortest side of the detector input, in pixels. 640 since 2026-11-12 (owner decision): on 340 frames of the recall
+# benchmark it found the same 20 of 22 objects as 800, and a frame took 4.8 s instead of 5.7 s (benchmarks/recall/README.md).
+input_short_edge = 640
+# Best boxes that one phrase can give.
+max_per_phrase = 10
+# Number of phrases in one detector pass. Each pass is a full model run.
+chunk_size = 30
+# A phrase of a user, for `detect_phrases`, is cut to this many characters. A long phrase fills the prompt.
+phrase_max_chars = 60
+# Boxes with an IoU at or above this value are merged.
+nms_iou = 0.5
+# A box larger than this part of the frame, or with a side shorter than min_box_side, is dropped.
+max_frame_fraction = 0.6
+min_box_side = 12
+# A candidate with more than this part of its area inside a hand box is "in hand".
+hand_overlap = 0.3
+# A candidate with at least this part of its area inside a depiction box is marked
+# quality_ok = false. It is not dropped: the detector can box a book cover as a screen.
+depiction_inside = 0.8
+# Phrases of the objects to find. The product owner sets this list.
+default_phrases = [
+  "a bottle",
+  "a pair of glasses",
+  "a set of keys",
+  "a mobile phone",
+  "a wallet",
+  "a remote control",
+  "a cup",
+  "a watch",
+  "a pill box",
+  "a hearing aid",
+]
+# Phrases of small objects. They also run in the tiled pass. Each one must be in default_phrases.
+small_phrases = ["a set of keys", "a watch", "a pill box", "a hearing aid"]
+hand_phrase = "a hand"
+depiction_phrases = [
+  "a television screen",
+  "a computer monitor",
+  "a picture frame",
+  "a mirror",
+  "a poster",
+]
+generic_phrase = "an object"
+# Tiled pass for small objects: 2 x 2 tiles. It costs 4 more model runs.
+tiling_enabled = false
+tile_overlap = 0.2
+
+[embedding]
+# The DINOv2 patch size is 14 pixels. These sizes must be multiples of 14.
+frame_short_edge = 448
+frame_long_edge_max = 784
+crop_size = 224
+# A box with a side shorter than this value is embedded from a padded crop.
+small_box_min_side = 64
+# The side is measured in model pixels: after the frame is scaled to the model input.
+crop_padding = 0.15
+
+[enrollment]
+# E3: the views that one reference photo gives. Allowed names: "original" (the box as it is),
+# "box_smaller", "box_larger" (the box grows or shrinks by box_scale), and "brighter"
+# (the photo is brighter by the value of brightness). Each name makes one vector.
+augmentations = ["original", "box_smaller", "box_larger", "brighter"]
+box_scale = 0.10
+brightness = 0.15
+# E4: the threshold of an object is mean - tau_std_factor * std of the similarities between
+# its views of different photos, but at least tau_min. The strong threshold is tau + tau_strong_offset.
+# The formula alone is not stable with 3 or 4 photos. On 14 test photos (see benchmarks/calibration),
+# it gave between 0.18 and 0.54, and a low value let half of the wrong boxes pass. The floor of 0.45 and
+# the offset of 0.10 gave no wrong strong match, at the same recall.
+tau_std_factor = 0.5
+tau_strong_offset = 0.10
+tau_min = 0.45
+# The margin that a match must have over the nearest look-alike (the doc starts with 0.03 and 0.08).
+margin_min = 0.03
+margin_strong = 0.08
+# An object needs at least this number of confirmed photos before it is calibrated.
+min_photos = 3
+# The self-test of the photos (plan part D1): the carer gets a warning when every two photos of an object have a
+# background (the DINOv2 key of the photo with the object painted grey) with a cosine of place_same_min or more.
+# Then all photos show one place, and the object can look like its place. On 4 test objects: the headset (2 photos
+# on a bed) 0.83, the watch (3 photos on one table) 0.64, the book 0.58, the bottle (other places) 0.18. Start value.
+place_same_min = 0.60
+
+[query]
+# The encoder cuts a text after this many tokens. The model was trained with 128.
+max_tokens = 128
+
+[verification]
+# false: the model is not loaded, and no sighting is verified.
+enabled = true
+# A candidate is the same object as a reference picture if at least this many keypoints match.
+# In the first test, the true object had 59 to 215 matches. Other things had 5 to 13.
+min_matches = 30
+# A match counts if its confidence is at least this value.
+match_threshold = 0.2
+# Both pictures are cut from the box of the object, with this much space around it (a part of the box).
+crop_padding = 0.15
+
+[scene]
+# false: the model is not loaded, and no place is described.
+enabled = true
+# The model scores a picture against one sentence for each word in the lists.
+prompt = "a photo of {label}"
+# Fixed lists. The description can only use these words. A wrong word from a list is a safer error than an invented text.
+rooms = [
+  "a bedroom",
+  "a living room",
+  "a kitchen",
+  "a bathroom",
+  "a corridor",
+  "a balcony",
+  "a study room",
+  "a dining room",
+  "an outdoor area",
+]
+surfaces = [
+  "a table",
+  "a desk",
+  "a shelf",
+  "the floor",
+  "a bed",
+  "a chair",
+  "a window sill",
+  "a kitchen counter",
+  "a sofa",
+  "a cupboard",
+]
+# To find the surface, the model looks at the box of the object with space around it. The space is this part of
+# the size of the box: on each side of the box, and below it. Above the box, the space is half of this.
+surface_context = 1.0
+
+[speech]
+# false: the model is not loaded, and the application does not listen.
+enabled = true
+# The longest recording that the application accepts, in seconds. Whisper reads 30 seconds at most.
+max_seconds = 15
+# The most new tokens (about words) that the model writes for one recording.
+max_new_tokens = 64
+
+[open_detection]
+# false: the model is not loaded, and no broad detection runs.
+enabled = true
+# A box needs at least this confidence. Start value. The test on 8 frames used 0.10 and found the laptop at 0.96 and above.
+confidence = 0.25
+# The most boxes that one frame keeps, the most confident first.
+max_boxes = 20
+# The model resizes the frame to this side (a multiple of 32). A small object is lost at 640 in a large frame.
+input_size = 640
+# A box whose short side is below this value (in frame pixels) is dropped.
+min_box_side = 24
+# The SigLIP vector of each box is cut with matching.crop_padding. One vector serves the matching and the open search.
+
+[language]
+# false: the model is not loaded, and the open search does not rewrite a description into names.
+enabled = true
+# The longest text that the model gets, in characters. A longer text is cut.
+max_input_chars = 300
+# The most new tokens that the model writes for one rewrite. Three short names need about 15.
+max_new_tokens = 24
+# The most names that a rewrite gives back.
+max_names = 3
+# The instruction for the rewrite. The model writes the names and nothing else, so its words cannot reach the voice.
+# The instruction names no object that could be a right answer, because the model repeats such an example.
+rewrite_system = "You help a person with memory loss to find lost objects. The person describes an object by what they do with it. Think about which physical object or device people use for that, and answer with the 3 most likely common names of that object, separated by commas, and nothing else. Name the object itself, not the activity or the content."
+# Examples of a question and the right answer. They are far from the questions of the test (see docs/backend/Open Search.md).
+rewrite_examples = [
+  ["what I listen to music on", "phone, speaker, radio"],
+  ["what I cook rice in", "pot, cooker, pan"],
+]
+# The description of a frame (image and checked facts). The model writes one sentence about the place of an object.
+# The sentence has no time: the answer adds the time. The backend checks every word of the sentence against the facts.
+describe_system = "You describe a photo for a person with memory loss. You get FACTS that were checked. Write ONE short, calm sentence of at most 25 words that says where the object is and what is next to it. Use ONLY the facts and what you clearly see in the photo. Do not mention colours, time, people or details that you are not sure about. If you are not sure, say less."
+# The most new tokens for one description.
+describe_max_new_tokens = 60
+# The longest side of the picture that the model gets, in pixels. A larger picture costs more time.
+describe_image_side = 640
+
+[matching]
+# How a region becomes a sighting of an enrolled object (stage I4). See ai/evidence.py and docs/backend/Memory.md.
+# "tau": the DINOv2 similarity must reach the threshold of the object (one test).
+# "evidence": several independent signals give one score. It needs the scene model (SigLIP, [scene] enabled = true).
+# "keys": two picture keys (SigLIP and the DINOv2 CLS token of the crop) and a word vote. See ai/keys.py.
+#         It needs the scene model. With the broad detector on, the backend also scores the YOLOE boxes.
+# The evidence values come from benchmarks/matching (15 frames with a watch, a headset and a book, and the
+# 14 photos of the speckled bottle as a hold-out set). They are start values. Measure again with more objects.
+# Default "keys" since 2026-11-12 (owner decision): 20 of 22 objects found, against 13 for "evidence" (benchmarks/recall).
+mode = "keys"
+# A region is scored only if its DINOv2 similarity to a tracked object is at least this value. It is low on purpose:
+# the watch on a wrist scored 0.26 and was right. The other signals decide.
+candidate_min = 0.20
+# The most regions of one frame that are scored. Each one costs a SigLIP run (about 0.1 s on the development CPU).
+max_regions = 8
+# A match must agree with this many reference photos. A match with one view only is often a lucky match.
+top_photos = 2
+# The SigLIP crop is the box with this much space around it (a part of the box, on each side).
+crop_padding = 0.05
+# Common things that a region can show instead of an enrolled object. The meaning signal compares with them.
+contrast_phrases = [
+  "a hand",
+  "an arm",
+  "a person",
+  "a face",
+  "a table",
+  "a wall",
+  "a floor",
+  "a chair",
+  "a bed",
+  "a phone",
+  "a bottle",
+  "a cup",
+  "a bag",
+  "a cable",
+  "a laptop",
+  "a paper",
+  "a bracelet",
+  "an object",
+]
+# The score: bias + weight_meaning * min(logit(meaning), meaning_cap) + weight_visual * (visual - visual_centre) / visual_scale
+#            + weight_dino * (dino_agree - dino_centre) / dino_scale + weight_margin * min(margin, margin_cap) / margin_scale
+bias = 0.0
+# The meaning tells the kind of thing, not which one. Its positive part is capped, so "a book" cannot make "my book".
+weight_meaning = 1.0
+meaning_cap = 1.0
+weight_visual = 1.5
+visual_centre = 0.70
+visual_scale = 0.05
+weight_dino = 0.4
+dino_centre = 0.40
+dino_scale = 0.05
+weight_margin = 0.5
+margin_cap = 0.20
+margin_scale = 0.10
+# A region with a score of at least score_maybe is a weak sighting ("maybe"). At least score_sure: a strong sighting.
+# In the benchmark, the true matches scored 4.1 to 8.1, and the best false match 2.6 (another book).
+# A weak sighting still needs the check of stage I5 or a second frame (see [memory] in backend/config.toml).
+score_maybe = 3.0
+score_sure = 6.0
+# ---- The mode "keys" (ai/keys.py). The values come from the replay of benchmarks/recall (README, phase R1a):
+# 4 objects, 31 home frames, 309 frames of other homes. Fixed bars, no cohort. They are start values.
+# The DINOv2 key is the CLS token of the tight crop at this size (a multiple of 14).
+key_crop_size = 224
+# Strong: both keys at their strong bars.
+sig_strong = 0.77
+dino_strong = 0.42
+# Weak: the SigLIP key at its weak bar, and one more vote: the DINOv2 key at dino_weak, or a word vote.
+# Any dino_weak from 0.36 to 0.42 gave the same result in the replay.
+sig_weak = 0.72
+dino_weak = 0.40
+# A word vote: the detector score of a word of the object on the box. Words never make a sighting alone.
+word_vote = 0.30
