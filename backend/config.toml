@@ -1,0 +1,194 @@
+# Settings for the backend component.
+
+[ingest]
+# New uploads are refused when this many images wait for the worker.
+# A slow device (the Raspberry Pi) cannot clear a long queue.
+max_pending = 500
+
+[api]
+# Name of the environment variable that holds the access token.
+# If this variable is set, every upload request needs the header
+# "Authorization: Bearer <token>". If it is not set, the endpoint is open.
+token_env_var = "SAARTHI_API_TOKEN"
+
+[worker]
+# How long the worker waits for a wake-up signal when no image waits, in seconds.
+# An upload wakes the worker at once. This time is only a safety net.
+idle_wait_seconds = 5
+# The generic pass ("an object") runs on every Nth analysed image. 0 never runs it.
+# Each generic pass costs one more detector run.
+generic_pass_every = 10
+# An image is a near duplicate if it looks like an image captured in this time window, in minutes.
+duplicate_window_minutes = 60
+# The worker compares with at most this number of recent images.
+duplicate_max_compared = 200
+# The worker waits this long after an error in its own loop, in seconds.
+error_pause_seconds = 5
+# A box of the broad detector is linked to a candidate box of a registered object when the overlap (IoU) is at least this value.
+# A linked box is kept. The link tells the search that the registered path has seen the same thing.
+open_link_iou = 0.5
+
+[server]
+# The address and the port of the web server. It serves the upload page and the upload route.
+# "0.0.0.0" accepts requests from the local network. "127.0.0.1" accepts only this computer.
+host = "0.0.0.0"
+port = 8080
+# At shutdown, the server waits this long (in seconds) for the worker to finish its image.
+worker_stop_seconds = 120
+# HTTPS. A phone allows the microphone only on a page with HTTPS. Set both paths to turn it on.
+# A relative path starts at the project folder. Empty: the server uses HTTP. See docs/backend/HTTPS.md.
+# The variables SAARTHI_TLS_CERT and SAARTHI_TLS_KEY replace these two keys. The script ./start sets them.
+tls_certfile = ""
+tls_keyfile = ""
+
+[maintenance]
+# The maintenance job runs when the application starts, and then every N minutes.
+# It deletes expired images (see retention.days in storage/config.toml), deletes orphan
+# files, reports missing files, and saves the vector index to disk.
+interval_minutes = 60
+# At most this number of orphan files is deleted in one run. A larger number is reported
+# as a warning and not deleted. This protects the images if the database is wrong or empty.
+# 0 never deletes an orphan file.
+orphan_delete_limit = 100
+# Expired images are deleted in groups of this size.
+retention_batch = 100
+
+[enrollment]
+# The largest number of reference photos for one object, and of objects.
+max_photos_per_object = 20
+max_objects = 50
+# "Is this your object?" (plan part D2, backend/review.py). The page shows the boxes of the frames of the last
+# review_hours that look most like the object: at most review_max boxes, one for each frame, with a SigLIP
+# agreement of review_min or more. Start values. A lower review_min shows more boxes that are not the object.
+review_hours = 24  # The frames of the rolling buffer (retention.days = 1)
+review_max = 6
+review_min = 0.55
+
+[memory]
+# A strong sighting changes the last-seen record of an object at once. A weak one changes it
+# only when the object has this many sightings in different frames within the window.
+# The window ends at the time of the new sighting.
+hysteresis_window_seconds = 60
+hysteresis_hits = 2
+# A weak sighting is checked against the reference photos of the object (stage I5, see ai/config.toml).
+# A sighting that passes counts as strong. A sighting that fails stays weak. The check never rejects a sighting.
+verify_weak = true
+# The check compares the sighting with at most this many reference photos, the most similar first.
+verify_max_references = 3
+
+[search]
+# The record "last seen" of an object is fresh for this many hours. After this, a search
+# also looks in the archive of frames for a newer sighting.
+stale_after_hours = 24
+# The archive is searched in windows of this many minutes, newest window first.
+window_minutes = 60
+# The search never looks further back than this many hours. A search with no record stops here.
+max_scan_hours = 24  # The rolling buffer keeps 24 hours (retention.days = 1)
+# A window holds at most this many regions. The oldest regions of a longer window are left out.
+max_regions_per_window = 5000
+# A search compares at most this many frames. A longer search stops, and the answer says so.
+max_frames = 3000
+# The picture of an answer shows the object with this much space around it, as a part of
+# the width and the height of its box. The part is added on each side.
+crop_padding = 0.25
+# A weak hit in the archive is checked against the reference photos of the object (stage I5, see ai/config.toml).
+# A hit that passes counts as strong, so the answer does not say "maybe". A hit that fails stays weak.
+verify_weak = true
+# The check compares with at most this many reference photos, the most similar first.
+verify_max_references = 3
+# The mode "evidence" of [matching] in ai/config.toml reads a frame and runs SigLIP on it before it can score it.
+# A search scores at most this many frames (only frames with a candidate region count). A longer search stops,
+# and the answer says so. About 0.5 s for each frame on the development CPU.
+evidence_max_frames = 30
+
+[query]
+# The words of a user are turned into vectors and compared with a description of each object
+# (its name, its category phrase and its synonyms). The values are start values.
+# A match is sure if the best score is at least matched_min_score and it is at least
+# matched_min_gap above the second best score.
+matched_min_score = 0.35
+matched_min_gap = 0.10
+# Below matched_min_score, the user sees the best objects to choose from, if the best score is
+# at least suggest_min_score. Below this value, no object fits the words.
+suggest_min_score = 0.20
+# The most objects that the user sees to choose from.
+max_candidates = 3
+# A question with more characters than this is refused.
+max_chars = 300
+
+[describe]
+# The description of the place of an object (see docs/backend/Voice.md). All values are start values.
+# The room is taken from the frame of the answer and the frames near it in time, because a single
+# frame can mislead (a close-up of a floor does not show the room).
+# A frame is near if it was captured at most this many seconds before or after the frame of the answer.
+neighbour_window_seconds = 120
+# The most neighbouring frames that are used.
+neighbour_max_frames = 4
+# The room is named only if at least this many frames (the frame of the answer counts) have scores.
+room_min_frames = 3
+# ...and if the best room (the room with the best average score) is the best room of at least this part of the frames.
+room_agree_fraction = 0.6
+# ...and if the average score of this room is at least this value. If one of the three rules fails, the voice says nothing about the room.
+room_min_score = 0.4
+# The surface under the object is named only if its score is at least this value.
+surface_min_score = 0.4
+# The time zone for the part of the day in the sentence ("yesterday evening"). An IANA name, for example "Asia/Kolkata".
+# Empty: the time zone of the computer that runs the application. The server stores UTC.
+time_zone = ""
+# A sighting at least this many hours old gets a part of the day. A younger one gets "12 minutes ago" or "3 hours ago".
+day_part_min_hours = 6
+# The language model writes one sentence about the place of each last-seen frame, in the background, when the worker has
+# no frame to process. The answer uses the sentence if the check passes, and the template sentence if not.
+write = true
+# A name of the broad detector goes into the facts only if its confidence is at least this value.
+# Wrong names are common below it ("bed" for a soap tray, "cork" for a cable).
+name_min_confidence = 0.7
+# A sentence with more words is refused.
+max_words = 30
+# Words that a sentence may use without being in the facts. They make no claim about the scene.
+safe_words = ["wall", "floor", "room", "background", "side", "edge", "corner", "top", "area"]
+
+[voice]
+# A recording shorter than this (in seconds) is refused.
+min_seconds = 0.5
+# A recording whose sound level (RMS, 0 to 1) is below this value is silent. It gets no text, because a
+# speech model can write words for silence.
+silence_rms = 0.005
+
+[open_search]
+# The search for objects that nobody registered (see docs/backend/Open Search.md). It runs only when no enrolled
+# object fits the words. The values are start values.
+# Step 1: the phrase is compared with the names that the broad detector gave to the stored boxes.
+# A name counts if the score (the cosine, 0 to 1) is at least this value.
+label_min_score = 0.6
+# ...and the box of a name that scores within this distance of the best name can be the answer. The newest frame wins.
+label_tier = 0.15
+# Step 2, if no name fits: the SigLIP vector of the phrase is compared with the vector of each stored box.
+# The best box must reach this probability. The value is high on purpose: on 18 frames, every answer of this step
+# below 0.63 was wrong (a "passbook" for a laptop, a "laundry room" for a bottle). A wrong answer is worse than none.
+visual_min_probability = 0.8
+# ...and must beat the best of the neutral phrases below by this value.
+visual_margin = 0.02
+neutral_phrases = ["an object", "a wall", "a floor", "a table", "a person"]
+# Step 3: a small language model rewrites a description into object names. It runs only for a description of at least
+# this many words. A name ("piano") is not rewritten: the model would give a neighbour ("keyboard") and find a wrong box.
+rewrite_min_words = 3
+# A name from the model must fit the name of a stored box almost exactly. A looser fit ("keyboard" and "laptop keyboard"
+# score 0.83) gave a wrong answer in a test.
+rewrite_min_score = 0.9
+# The search never looks back further than this many hours, and reads at most this many boxes.
+max_scan_hours = 24  # The rolling buffer keeps 24 hours (retention.days = 1)
+max_boxes = 5000
+# The version of the search. "classic" trusts the names and the pictures (steps 1 to 3 above).
+# "verified" uses the pictures and names only to choose candidate boxes. Grounding DINO then checks each candidate
+# frame with the words of the user, and an unchecked box is never an answer. See docs/backend/Open Search.md.
+mode = "verified"  # Owner decision 2026-11-12
+# The next four keys are start values. Only the mode "verified" uses them.
+# The number of boxes (best SigLIP score over the prompts) that become candidates.
+verify_top_boxes = 20
+# The number of frames that Grounding DINO checks, newest first. One run of the detector for each frame.
+verify_max_frames = 3
+# A frame passes if a Grounding DINO box has at least this score...
+verify_min_score = 0.35
+# ...and at least this IoU with the candidate box.
+verify_min_iou = 0.3

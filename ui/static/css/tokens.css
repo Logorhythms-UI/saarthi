@@ -1,0 +1,91 @@
+/*
+ * Design tokens. This is the only file that contains colour values.
+ * Other files use these variables.
+ * Dark values apply when Quasar sets body--dark (follows the system setting).
+ */
+
+:root {
+  /* Colour: surfaces and text */
+  --color-page: #f6f5f1;
+  --color-surface: #ffffff;
+  --color-border: #dcdad2;
+  --color-border-strong: #767d78;
+  --color-text: #1f2a30;
+  --color-text-muted: #56636b;
+
+  /* Colour: accent */
+  --color-accent: #0f766e;
+  --color-accent-hover: #115e59;
+  --color-accent-soft: #e0f1ef;
+  --color-on-accent: #ffffff;
+
+  /* Colour: status. Each status has a text colour and a soft background. */
+  --color-neutral: #4b5563;
+  --color-neutral-soft: #eceae4;
+  --color-success: #166534;
+  --color-success-soft: #e3f3e8;
+  --color-warning: #7a4d00;
+  --color-warning-soft: #fcefd2;
+  --color-danger: #b42318;
+  --color-danger-soft: #fde8e6;
+
+  /* Spacing */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* Shape */
+  --radius-s: 0.375rem;
+  --radius-m: 0.625rem;
+  --radius-l: 0.875rem;
+  --border-width: 1px;
+
+  /* Type */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --text-s: 0.875rem;
+  --text-m: 1rem;
+  --text-l: 1.25rem;
+  --text-xl: 1.75rem;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-bold: 650;
+  --leading: 1.5;
+
+  /* Layout */
+  --tap-min: 3rem;
+  --page-max: 44rem;
+  --page-gutter: var(--space-4);
+
+  /* Motion */
+  --motion-fast: 120ms;
+
+  /* Quasar reads these for its own widgets. */
+  --q-primary: var(--color-accent);
+}
+
+body.body--dark {
+  --color-page: #121a1d;
+  --color-surface: #1a2428;
+  --color-border: #2f3d44;
+  --color-border-strong: #6f8591;
+  --color-text: #e6ecee;
+  --color-text-muted: #a3b3ba;
+
+  --color-accent: #4fd1c5;
+  --color-accent-hover: #7ae0d6;
+  --color-accent-soft: #17332f;
+  --color-on-accent: #07211e;
+
+  --color-neutral: #c3ccd1;
+  --color-neutral-soft: #26323a;
+  --color-success: #8fdca8;
+  --color-success-soft: #16301f;
+  --color-warning: #f0c36d;
+  --color-warning-soft: #36290e;
+  --color-danger: #ff9d93;
+  --color-danger-soft: #3b1b18;
+}
